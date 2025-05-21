@@ -29,6 +29,10 @@ class Query(BaseResource):
             page = max(1, int(request.args.get('page', 1)))
             per_page = max(1, min(100, int(request.args.get('per_page', 10))))
             
+            # Add order_by and order_direction parameters
+            order_by = request.args.get('order_by')
+            order_direction = request.args.get('order_direction', 'asc').lower()
+            
             query_filter = {}
             if field and value is not None:
                 # Handle special cases for value
@@ -43,7 +47,14 @@ class Query(BaseResource):
             
             skip = (page - 1) * per_page
             total = db[data_type].count_documents(query_filter)
-            results = list(db[data_type].find(query_filter).skip(skip).limit(per_page))
+            
+            # Create the query with ordering
+            query = db[data_type].find(query_filter)
+            if order_by:
+                direction = 1 if order_direction == 'asc' else -1
+                query = query.sort(order_by, direction)
+            
+            results = list(query.skip(skip).limit(per_page))
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -109,39 +120,33 @@ class Query(BaseResource):
         type_param.add_argument('value', type=str, required=False, help='Value to filter for', location='args')
         type_param.add_argument('page', type=int, required=False, default=1, help='Page number', location='args')
         type_param.add_argument('per_page', type=int, required=False, default=10, help='Items per page', location='args')
+        type_param.add_argument('order_by', type=str, required=False, help='Field to order results by', location='args')
+        type_param.add_argument('order_direction', type=str, required=False, default='asc', 
+                              choices=['asc', 'desc'], help='Sort direction (asc or desc)', location='args')
 
-        # Register the endpoint with Swagger
-        cls.ns.response(200, 'Success', response_model, example=example_response)
-        cls.ns.response(400, 'Validation Error')
-        cls.ns.response(500, 'Internal Server Error')
-        
-        # Add documentation with query parameters
+        # Update the documentation with ordering examples
         cls.ns.doc(
-            description='''
-            Query data from a collection with pagination and filtering.
+            description='''Query data from a collection with pagination, filtering, and sorting.
             
             Example requests:
             ```
-            # Simple equality query
-            GET /api/query?type=users&field=age&value=25&page=1&per_page=10
+            # Simple equality query with sorting
+            GET /api/query?type=users&field=age&value=25&page=1&per_page=10&order_by=name&order_direction=asc
 
-            # MongoDB operator query (value must be URL-encoded JSON)
-            GET /api/query?type=users&field=age&value={"$gt":25}&page=1&per_page=10
+            # MongoDB operator query with sorting
+            GET /api/query?type=users&field=age&value={"$gt":25}&page=1&per_page=10&order_by=created_at&order_direction=desc
 
-            # String query
-            GET /api/query?type=users&field=name&value=John&page=1&per_page=10
+            # String query with sorting
+            GET /api/query?type=users&field=name&value=John&page=1&per_page=10&order_by=age&order_direction=desc
 
-            # Array query (value must be URL-encoded JSON)
-            GET /api/query?type=users&field=tags&value=["admin","user"]&page=1&per_page=10
+            # Array query with sorting
+            GET /api/query?type=users&field=tags&value=["admin","user"]&page=1&per_page=10&order_by=name&order_direction=asc
 
-            # JSON object field query (value must be URL-encoded JSON)
-            GET /api/query?type=users&field=data&value={"test":"value"}&page=1&per_page=10
+            # JSON object field query with sorting
+            GET /api/query?type=users&field=data&value={"test":"value"}&page=1&per_page=10&order_by=data.created_at&order_direction=desc
 
-            # Nested field query (value must be URL-encoded JSON)
-            GET /api/query?type=users&field=data.nested.field&value=value&page=1&per_page=10
-
-            # MongoDB operator on nested field (value must be URL-encoded JSON)
-            GET /api/query?type=users&field=data.test&value={"$regex":"val.*"}&page=1&per_page=10
+            # Nested field query with sorting
+            GET /api/query?type=users&field=data.nested.field&value=value&page=1&per_page=10&order_by=data.nested.priority&order_direction=asc
             ```
             
             The value field can be any valid JSON value or MongoDB query operator.
@@ -149,7 +154,11 @@ class Query(BaseResource):
             1. Query the entire object for an exact match
             2. Query specific nested fields using dot notation
             3. Use MongoDB operators on nested fields
-            ''',
+            
+            Sorting:
+            - Use order_by to specify the field to sort by
+            - Use order_direction to specify sort direction (asc or desc)
+            - Sorting works with both top-level and nested fields using dot notation''',
             security=['Bearer Auth', 'System Auth']
         )
         

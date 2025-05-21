@@ -14,7 +14,9 @@ def init_models(api):
         'field': fields.String(description='Field to filter by'),
         'value': fields.String(description='Value to filter for'),
         'page': fields.Integer(description='Page number', default=1),
-        'per_page': fields.Integer(description='Items per page', default=10)
+        'per_page': fields.Integer(description='Items per page', default=10),
+        'order_by': fields.String(description='Field to order results by'),
+        'order_direction': fields.String(description='Sort direction (asc or desc)', enum=['asc', 'desc'], default='asc')
     })
 
     api.model('UpdateParams', {
