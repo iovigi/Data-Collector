@@ -76,11 +76,11 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-def configure_logging(level: str = "INFO") -> None:
+def configure_logging(level: str = "INFO", stream: Any = None) -> None:
     """Configure root logger for structured JSON output."""
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(stream or sys.stdout)
     handler.setFormatter(JsonFormatter())
     root.handlers.clear()
     root.addHandler(handler)

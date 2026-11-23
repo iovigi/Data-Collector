@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.0rc2 (2026-11-23 — Final Security & MCP Readiness)
+- **SEC-01**: Enforced durable `OAUTH_RSA_PRIVATE_KEY_PEM` (>=2048-bit) in production `builtin` OAuth mode and `https://` `OAUTH_JWKS_URL` in `external` mode.
+- **SEC-02 / SEC-05**: Added OAuth consent screen (`Approve`/`Deny`), signed `HttpOnly` CSRF cookie, strict client scope intersection, PKCE validation prior to atomic code consumption, and signature-verified `client_id`-bound token revocation.
+- **SEC-03**: Added builtin OAuth `grant_type=refresh_token` with atomic rotation and replay-family revocation.
+- **SEC-04**: Closed webhook DNS-rebinding TOCTOU via `resolve_and_pin_url` + `post_webhook_safe` (pinned IP connection, SNI preservation, redirects disabled, IPv4-mapped IPv6 rejected).
+- **MCP**: Added Starlette `lifespan` forwarding `mcp.session_manager.run()` in `dc-mcp-http` and redirected `dc-mcp-stdio` logs to `sys.stderr`; verified with real MCP SDK `ClientSession` over stdio and concurrent Streamable HTTP.
+
 ## 2.0.0rc1 (2026-11-23)
 - **Security (M1)**: Removed automatic `admin/admin123` startup seeding and hardcoded fallback JWT secret; added `data-collector admin bootstrap` CLI, fail-fast production config, strict CORS, generic error envelopes with `X-Request-Id`, and disabled unsafe legacy `/api/*` routes by default.
 - **Architecture (M2)**: Introduced `data_collector/` layered architecture (`domain`, `services`, `infrastructure`, `api`, `mcp`, `workers`) with centralized `MongoManager` pooling and `RedisManager` rate limiting.

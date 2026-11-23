@@ -135,6 +135,18 @@ class Settings(BaseSettings):
                 raise ValueError("MONGODB_URI is required in production")
             if self.enable_legacy_system_auth:
                 raise ValueError("ENABLE_LEGACY_SYSTEM_AUTH is prohibited in production")
+            if not self.mcp_public_url.startswith("https://"):
+                raise ValueError("MCP_PUBLIC_URL must use https:// in production")
+            if not self.auth_issuer.startswith("https://"):
+                raise ValueError("AUTH_ISSUER must use https:// in production")
+            if self.oauth_mode == "builtin" and not self.oauth_rsa_private_key_pem.strip():
+                raise ValueError(
+                    "OAUTH_RSA_PRIVATE_KEY_PEM is required in production when OAUTH_MODE=builtin"
+                )
+            if self.oauth_mode == "external" and not self.oauth_jwks_url.startswith("https://"):
+                raise ValueError(
+                    "OAUTH_JWKS_URL (https://) is required in production when OAUTH_MODE=external"
+                )
         else:
             if not secret:
                 # Ephemeral per-process random fallback only for dev/test when unset;
@@ -142,6 +154,22 @@ class Settings(BaseSettings):
                 object.__setattr__(self, "jwt_secret_key", os.urandom(32).hex())
             elif secret in _WEAK_SECRETS:
                 raise ValueError("JWT_SECRET_KEY cannot be set to a known weak/default value")
+
+        if self.oauth_rsa_private_key_pem.strip():
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+
+            try:
+                pem_bytes = self.oauth_rsa_private_key_pem.replace("\\n", "\n").encode("utf-8")
+                key = serialization.load_pem_private_key(pem_bytes, password=None)
+            except Exception as exc:
+                raise ValueError(
+                    "OAUTH_RSA_PRIVATE_KEY_PEM could not be parsed as a valid PEM private key"
+                ) from exc
+            if not isinstance(key, rsa.RSAPrivateKey) or key.key_size < 2048:
+                raise ValueError(
+                    "OAUTH_RSA_PRIVATE_KEY_PEM must be an RSA key of at least 2048 bits"
+                )
 
         if not self.intent_secret_key.strip():
             object.__setattr__(self, "intent_secret_key", self.jwt_secret_key)

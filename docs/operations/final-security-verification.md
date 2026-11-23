@@ -1,0 +1,17 @@
+# Final Security & MCP Production Readiness Verification
+
+**Branch:** `hardening/final-security-mcp`  
+**Audit Baseline SHA:** `e1233770461c894130689febf1d7dc4a428e23ed`  
+**Date:** 2026-11-23
+
+## 1. Issue Resolution Matrix
+| ID | Baseline Status | Resolution & Files | Verification Evidence |
+|---|---|---|---|
+| **SEC-01** | `CONFIRMED` -> **FIXED** | `data_collector/config.py`, `data_collector/infrastructure/oauth.py`: Production `builtin` OAuth fails startup without `OAUTH_RSA_PRIVATE_KEY_PEM` (>=2048-bit RSA). External mode requires `https://` `OAUTH_JWKS_URL` and never generates local keys. Two instances with same PEM share `kid`/JWKS and validate each other's tokens. | `test_sec01_durable_key_enforcement_and_multi_instance_consistency` |
+| **SEC-02** | `CONFIRMED` -> **FIXED** | `data_collector/mcp/server_http.py`, `data_collector/infrastructure/oauth.py`: Added consent screen (`Approve`/`Deny`), `HttpOnly; SameSite=Lax` signed CSRF token (`_sign_csrf`/`_verify_csrf`), strict scope intersection against registered client `allowed_scopes`, and strict redirect URI validation. | `test_sec02_sec03_sec05_consent_csrf_scope_refresh_and_safe_revocation` |
+| **SEC-03** | `CONFIRMED` -> **FIXED** | `data_collector/infrastructure/oauth.py`, `data_collector/mcp/server_http.py`, `data_collector/mcp/auth.py`: Implemented `grant_type=refresh_token` with atomic rotation, replay-family revocation, client binding, and scope non-escalation; aligned RFC 8414 metadata. | `test_sec02_sec03_sec05_consent_csrf_scope_refresh_and_safe_revocation` |
+| **SEC-04** | `CONFIRMED` -> **FIXED** | `data_collector/infrastructure/ssrf.py`, `data_collector/services/m11_service.py`: `resolve_and_pin_url` + `post_webhook_safe` pins the resolved IP for the actual `httpx` connection (closing DNS-rebinding TOCTOU), preserves TLS `sni_hostname` + `Host` header, disables redirects, caps response bytes, and rejects IPv4-mapped IPv6 (`::ffff:127.0.0.1`). | `test_sec04_ssrf_dns_pinning_and_ipv6_mapped` |
+| **SEC-05a** | `CONFIRMED` -> **FIXED** | `data_collector/infrastructure/oauth.py` (`exchange_code`): Validates `client_id`, `redirect_uri`, expiry, and PKCE `S256` *before* atomic `find_one_and_update({used: False} -> {used: True})`. | `test_sec02_sec03_sec05_consent_csrf_scope_refresh_and_safe_revocation` |
+| **SEC-05b** | `CONFIRMED` -> **FIXED** | `data_collector/infrastructure/oauth.py` (`revoke_token`): Verifies JWT RS256 signature + `client_id` (or hashed refresh token + `client_id`) before revoking `jti`; forged attacker JWTs cannot revoke victim tokens. | `test_sec02_sec03_sec05_consent_csrf_scope_refresh_and_safe_revocation` |
+| **MCP-01** | `CONFIRMED` -> **FIXED (Local/SDK)** | `data_collector/mcp/server_http.py` (added Starlette `lifespan` forwarding `mcp.session_manager.run()`), `data_collector/mcp/server_stdio.py` (logs redirected to `sys.stderr`). Verified with real MCP SDK `ClientSession` over live `uvicorn` Streamable HTTP (concurrent Alice/Bob) and real `dc-mcp-stdio.exe` subprocess over real MongoDB 7 + Redis 7. Live ChatGPT/Claude remote UI remains `BLOCKED_EXTERNAL_VALIDATION`. | `test_real_mcp_sdk_http_concurrent_clients`, `dc-mcp-stdio.exe` real-DB run |
+| **OPS-01** | `CONFIRMED` -> **FIXED (Staging/Local)** | Validated `docker compose config --quiet`, built `data-collector:final-check`, and executed `mongodump` -> `dropDatabase()` -> `mongorestore` drill (12 documents restored, 0 failures). Public DNS/TLS/IdP remain operator prerequisites. | `mongodump`/`mongorestore` drill |

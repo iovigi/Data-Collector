@@ -23,7 +23,7 @@ from data_collector.domain.policies import require_workspace_membership
 from data_collector.infrastructure.repositories.base import serialize_doc, to_object_id
 from data_collector.infrastructure.repositories.record_repo import RecordRepository
 from data_collector.infrastructure.repositories.tenant_repo import WorkspaceRepository
-from data_collector.infrastructure.ssrf import validate_outbound_url
+from data_collector.infrastructure.ssrf import post_webhook_safe, validate_outbound_url
 from data_collector.services.audit_service import AuditService
 from data_collector.services.collection_service import CollectionService
 from data_collector.services.query_dsl import compile_filter
@@ -225,42 +225,42 @@ class WebhookService:
         )
         results: list[dict[str, Any]] = []
         body = json.dumps({"event": event_type, "data": payload}, default=str).encode("utf-8")
-        client = http_client or httpx.Client(timeout=5.0)
-        close_after = http_client is None
-        try:
-            for h in hooks:
-                validate_outbound_url(h["url"], allow_localhost_dev=self._allow_localhost_dev)
-                sig = self.sign_payload(h["signing_secret_enc"], body)
-                status = "delivered"
-                code = 0
-                try:
-                    resp = client.post(
-                        h["url"],
-                        content=body,
-                        headers={
-                            "Content-Type": "application/json",
-                            "X-DC-Event": event_type,
-                            "X-DC-Signature": sig,
-                        },
-                    )
-                    code = resp.status_code
-                    if code >= 400:
-                        status = "failed"
-                except Exception:
+        ts = str(int(utc_now().timestamp()))
+        for h in hooks:
+            delivery_id = secrets.token_hex(12)
+            signed_input = f"{ts}.".encode() + body
+            sig = self.sign_payload(h["signing_secret_enc"], signed_input)
+            status = "delivered"
+            code = 0
+            try:
+                code = post_webhook_safe(
+                    h["url"],
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-DC-Event": event_type,
+                        "X-DC-Timestamp": ts,
+                        "X-DC-Delivery-Id": delivery_id,
+                        "X-DC-Signature": sig,
+                    },
+                    allow_localhost_dev=self._allow_localhost_dev,
+                    http_client=http_client,
+                )
+                if code >= 400 or (300 <= code < 400):
                     status = "failed"
-                entry = {
-                    "webhook_id": str(h["_id"]),
-                    "workspace_id": workspace_id,
-                    "event": event_type,
-                    "status": status,
-                    "http_status": code,
-                    "created_at": utc_now(),
-                }
-                self._deliveries.insert_one(entry)
-                results.append(serialize_doc(entry) or {})
-        finally:
-            if close_after:
-                client.close()
+            except Exception:
+                status = "failed"
+            entry = {
+                "delivery_id": delivery_id,
+                "webhook_id": str(h["_id"]),
+                "workspace_id": workspace_id,
+                "event": event_type,
+                "status": status,
+                "http_status": code,
+                "created_at": utc_now(),
+            }
+            self._deliveries.insert_one(entry)
+            results.append(serialize_doc(entry) or {})
         return results
 
 

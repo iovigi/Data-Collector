@@ -69,23 +69,30 @@ def test_oauth_21_pkce_full_flow_and_revocation(full_ctx):
     assert reg.status_code == 201
     client_id = reg.json()["client_id"]
 
-    # 3. PKCE S256 Authorization Code grant
+    # 3. PKCE S256 Authorization Code grant (GET consent + CSRF -> POST approve)
     verifier = "v" * 64
     challenge = (
         base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
         .decode("ascii")
         .rstrip("=")
     )
+    auth_params = {
+        "client_id": client_id,
+        "redirect_uri": "https://chatgpt.com/aip/oauth/callback",
+        "state": "st123",
+        "scope": "workspace:read collection:read records:read",
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "resource": settings.mcp_public_url,
+    }
+    assert client.get("/oauth/authorize", params=auth_params).status_code == 200
+    csrf_tok = client.cookies.get("dc_oauth_csrf")
     auth_resp = client.post(
         "/oauth/authorize",
         data={
-            "client_id": client_id,
-            "redirect_uri": "https://chatgpt.com/aip/oauth/callback",
-            "state": "st123",
-            "scope": "workspace:read collection:read records:read",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "resource": settings.mcp_public_url,
+            **auth_params,
+            "csrf_token": csrf_tok,
+            "consent": "approve",
             "email": "oauth.user@example.com",
             "password": "StrongPassword123!",
         },
@@ -109,15 +116,14 @@ def test_oauth_21_pkce_full_flow_and_revocation(full_ctx):
     assert bad_tok.status_code == 400
 
     # New code + valid verifier succeeds
+    assert client.get("/oauth/authorize", params=auth_params).status_code == 200
+    csrf_tok2 = client.cookies.get("dc_oauth_csrf")
     auth_resp2 = client.post(
         "/oauth/authorize",
         data={
-            "client_id": client_id,
-            "redirect_uri": "https://chatgpt.com/aip/oauth/callback",
-            "scope": "workspace:read collection:read records:read",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "resource": settings.mcp_public_url,
+            **auth_params,
+            "csrf_token": csrf_tok2,
+            "consent": "approve",
             "email": "oauth.user@example.com",
             "password": "StrongPassword123!",
         },
@@ -143,7 +149,7 @@ def test_oauth_21_pkce_full_flow_and_revocation(full_ctx):
     assert actor.client_id == client_id
 
     # Revoke token -> subsequent verification fails
-    client.post("/oauth/revoke", data={"token": access_token})
+    client.post("/oauth/revoke", data={"token": access_token, "client_id": client_id})
     with pytest.raises(Exception, match="revoked"):
         container.oauth_service.verify_bearer_token(access_token)
 
