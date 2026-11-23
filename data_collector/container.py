@@ -9,6 +9,7 @@ from pymongo import MongoClient
 
 from data_collector.config import Settings, get_settings
 from data_collector.infrastructure.mongo import MongoManager
+from data_collector.infrastructure.oauth import OAuthService
 from data_collector.infrastructure.redis import RedisManager
 from data_collector.infrastructure.repositories.record_repo import RecordRepository
 from data_collector.infrastructure.repositories.tenant_repo import (
@@ -23,11 +24,18 @@ from data_collector.infrastructure.repositories.tenant_repo import (
     UserRepository,
     WorkspaceRepository,
 )
+from data_collector.infrastructure.storage import ArtifactStore, LocalVolumeArtifactStore
 from data_collector.services.audit_service import AuditService
 from data_collector.services.auth_service import AuthService
 from data_collector.services.collection_service import CollectionService
 from data_collector.services.export_service import ExportService
 from data_collector.services.import_service import ImportService
+from data_collector.services.m11_service import (
+    SavedQueryService,
+    SchemaMigrationService,
+    UsageAnalyticsService,
+    WebhookService,
+)
 from data_collector.services.record_service import RecordService
 
 
@@ -53,6 +61,12 @@ class Container:
     record_service: RecordService
     import_service: ImportService
     export_service: ExportService
+    oauth_service: OAuthService
+    artifacts: ArtifactStore
+    saved_queries: SavedQueryService
+    webhooks: WebhookService
+    schema_migrations: SchemaMigrationService
+    usage_analytics: UsageAnalyticsService
 
     def close(self) -> None:
         self.mongo.close()
@@ -109,6 +123,7 @@ def build_container(
         idempotency=idempotency,
         audit=audit_service,
     )
+    artifacts = LocalVolumeArtifactStore(cfg.storage_dir)
     import_service = ImportService(
         settings=cfg,
         workspaces=workspaces,
@@ -124,8 +139,28 @@ def build_container(
         collections=collection_service,
         records=records,
         jobs=jobs,
+        artifacts=artifacts,
         audit=audit_service,
     )
+    oauth_service = OAuthService(cfg, db)
+    saved_queries = SavedQueryService(
+        db=db,
+        collections=collection_service,
+        records=record_service,
+        audit=audit_service,
+    )
+    webhooks = WebhookService(
+        db=db,
+        workspaces=workspaces,
+        audit=audit_service,
+        allow_localhost_dev=(cfg.app_env != "production"),
+    )
+    schema_migrations = SchemaMigrationService(
+        collections=collection_service,
+        records=records,
+        audit=audit_service,
+    )
+    usage_analytics = UsageAnalyticsService(db=db, workspaces=workspaces)
 
     return Container(
         settings=cfg,
@@ -148,4 +183,10 @@ def build_container(
         record_service=record_service,
         import_service=import_service,
         export_service=export_service,
+        oauth_service=oauth_service,
+        artifacts=artifacts,
+        saved_queries=saved_queries,
+        webhooks=webhooks,
+        schema_migrations=schema_migrations,
+        usage_analytics=usage_analytics,
     )

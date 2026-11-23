@@ -9,6 +9,7 @@ from data_collector.api.v1.auth import auth_bp
 from data_collector.api.v1.collections import collections_bp
 from data_collector.api.v1.jobs import jobs_bp
 from data_collector.api.v1.keys import keys_bp
+from data_collector.api.v1.m11 import m11_bp
 from data_collector.api.v1.projects import projects_bp
 from data_collector.api.v1.records import records_bp
 from data_collector.api.v1.workspaces import workspaces_bp
@@ -24,4 +25,5 @@ def create_v1_blueprint() -> Blueprint:
     v1.register_blueprint(jobs_bp)
     v1.register_blueprint(keys_bp)
     v1.register_blueprint(audit_bp)
+    v1.register_blueprint(m11_bp)
     return v1

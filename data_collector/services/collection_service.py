@@ -10,7 +10,7 @@ from jsonschema.exceptions import SchemaError as JsonSchemaError
 
 from data_collector.domain.exceptions import NotFoundError, ValidationError
 from data_collector.domain.identities import Actor, Scope
-from data_collector.domain.policies import require_workspace_membership
+from data_collector.domain.policies import require_collection_policy, require_workspace_membership
 from data_collector.infrastructure.repositories.tenant_repo import (
     CollectionRepository,
     ProjectRepository,
@@ -163,7 +163,10 @@ class CollectionService:
         ws_id = proj["workspace_id"]
         role = self._workspaces.get_membership_role(ws_id, actor.principal_id)
         require_workspace_membership(actor, ws_id, role, Scope.COLLECTION_READ)
-        return self._collections.list_by_project(ws_id, project_id)
+        cols = self._collections.list_by_project(ws_id, project_id)
+        if actor.allowed_collection_ids is not None:
+            cols = [c for c in cols if c["id"] in actor.allowed_collection_ids]
+        return cols
 
     def get_collection(
         self, actor: Actor, collection_id: str, required_scope: Scope = Scope.COLLECTION_READ
@@ -173,7 +176,17 @@ class CollectionService:
             raise NotFoundError("Collection not found")
         ws_id = col["workspace_id"]
         role = self._workspaces.get_membership_role(ws_id, actor.principal_id)
-        require_workspace_membership(actor, ws_id, role, required_scope)
+        allowed = (
+            list(actor.allowed_collection_ids) if actor.allowed_collection_ids is not None else None
+        )
+        require_collection_policy(
+            actor,
+            ws_id,
+            role,
+            required_scope,
+            allowed_collection_ids=allowed,
+            collection_id=collection_id,
+        )
         return col
 
     def update_collection(

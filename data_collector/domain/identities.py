@@ -89,5 +89,6 @@ class Actor:
     workspace_id: str | None = None  # Set for workspace-scoped API keys
     client_id: str | None = None  # Set for OAuth / MCP clients
     key_id: str | None = None  # Set when authenticated via API key
+    allowed_collection_ids: frozenset[str] | None = None  # Optional per-key collection allowlist
     is_mcp: bool = False
     mcp_allow_writes: bool = False

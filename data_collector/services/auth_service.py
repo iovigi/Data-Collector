@@ -133,15 +133,15 @@ class AuthService:
         }
 
     def refresh(self, refresh_token: str) -> dict[str, Any]:
-        """Rotate refresh token with replay detection."""
+        """Atomically rotate refresh token with replay detection."""
         token_hash = hash_token(refresh_token)
-        record = self._refresh_tokens.find_by_hash(token_hash)
+        record = self._refresh_tokens.consume_if_active(token_hash)
         if record is None:
+            existing = self._refresh_tokens.find_by_hash(token_hash)
+            if existing is not None and existing.get("revoked_at") is not None:
+                self._refresh_tokens.revoke_family(str(existing["family_id"]))
+                raise AuthenticationError("Refresh token reused; session revoked")
             raise AuthenticationError("Invalid refresh token")
-        if record.get("revoked_at") is not None:
-            # Replay detected: revoke whole token family
-            self._refresh_tokens.revoke_family(str(record["family_id"]))
-            raise AuthenticationError("Refresh token reused; session revoked")
 
         expires_at = record["expires_at"]
         if isinstance(expires_at, datetime):
@@ -150,7 +150,6 @@ class AuthService:
             if expires_at < datetime.now(UTC):
                 raise AuthenticationError("Refresh token expired")
 
-        self._refresh_tokens.revoke_hash(token_hash)
         user_id = str(record["user_id"])
         user = self._users.find_by_id(user_id)
         if user is None or user.get("status") != "active":
@@ -232,12 +231,17 @@ class AuthService:
 
         self._api_keys.touch_last_used(doc["_id"])
         scopes = frozenset(Scope(s) for s in doc.get("scopes", []) if s in Scope._value2member_map_)
+        raw_allowed = doc.get("allowed_collection_ids")
+        allowed_cols = (
+            frozenset(str(c) for c in raw_allowed) if isinstance(raw_allowed, list) else None
+        )
         return Actor(
             principal_id=str(doc["principal_id"]),
             principal_type=PrincipalType.API_KEY,
             scopes=scopes,
             workspace_id=str(doc["workspace_id"]),
             key_id=str(doc["_id"]),
+            allowed_collection_ids=allowed_cols,
             is_mcp=is_mcp,
             mcp_allow_writes=self._settings.mcp_allow_writes,
         )

@@ -1,13 +1,13 @@
-"""Async export service with CSV formula-injection sanitization and SHA-256 checksums."""
+"""Streaming full-data export service with ArtifactStore and CSV formula sanitization."""
 
 from __future__ import annotations
 
 import csv
-import hashlib
-import io
 import json
 from pathlib import Path
 from typing import Any
+
+from bson import ObjectId
 
 from data_collector.config import Settings
 from data_collector.domain.entities import utc_now
@@ -19,6 +19,7 @@ from data_collector.infrastructure.repositories.tenant_repo import (
     JobRepository,
     WorkspaceRepository,
 )
+from data_collector.infrastructure.storage import ArtifactStore
 from data_collector.services.audit_service import AuditService
 from data_collector.services.collection_service import CollectionService
 from data_collector.services.query_dsl import compile_filter
@@ -26,6 +27,7 @@ from data_collector.services.record_service import _allowed_fields_for_collectio
 
 ALLOWED_EXPORT_FORMATS = frozenset({"json", "jsonl", "csv"})
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+_EXPORT_BATCH_SIZE = 500
 
 
 def sanitize_csv_cell(value: Any) -> str:
@@ -47,6 +49,7 @@ class ExportService:
         collections: CollectionService,
         records: RecordRepository,
         jobs: JobRepository,
+        artifacts: ArtifactStore,
         audit: AuditService,
     ) -> None:
         self._settings = settings
@@ -54,6 +57,7 @@ class ExportService:
         self._collections = collections
         self._records = records
         self._jobs = jobs
+        self._artifacts = artifacts
         self._audit = audit
 
     def submit_export(
@@ -74,7 +78,6 @@ class ExportService:
         )
         ws_id = col["workspace_id"]
         allowed = _allowed_fields_for_collection(col)
-        # Validate filter AST upfront before queuing
         compile_filter(filter_ast, allowed_fields=allowed)
 
         job = self._jobs.create(
@@ -103,6 +106,35 @@ class ExportService:
 
         return self._jobs.get_by_id(job["id"]) or job
 
+    def _iter_export_batches(
+        self,
+        *,
+        workspace_id: str,
+        project_id: str,
+        collection_id: str,
+        mongo_filter: dict[str, Any],
+    ) -> Any:
+        last_oid: ObjectId | None = None
+        while True:
+            cursor_filter = {"_id": {"$gt": last_oid}} if last_oid is not None else None
+            batch = self._records.find_page(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                collection_id=collection_id,
+                mongo_filter=mongo_filter,
+                sort_field="_id",
+                sort_direction=1,
+                limit=_EXPORT_BATCH_SIZE,
+                cursor_filter=cursor_filter,
+                max_time_ms=self._settings.max_query_time_ms,
+            )
+            if not batch:
+                break
+            yield batch
+            last_oid = ObjectId(batch[-1]["id"])
+            if len(batch) < _EXPORT_BATCH_SIZE:
+                break
+
     def execute_export_job(self, job_id: str) -> dict[str, Any]:
         job = self._jobs.get_by_id(job_id)
         if job is None:
@@ -121,56 +153,76 @@ class ExportService:
 
         allowed = _allowed_fields_for_collection(col)
         mongo_filter = compile_filter(params.get("filter"), allowed_fields=allowed)
-        rows = self._records.find_page(
-            workspace_id=job["workspace_id"],
-            project_id=params["project_id"],
-            collection_id=collection_id,
-            mongo_filter=mongo_filter,
-            sort_field="_id",
-            sort_direction=1,
-            limit=10000,
-            max_time_ms=self._settings.max_query_time_ms,
-        )
-
         fmt = params["format"]
-        out_dir = Path(self._settings.storage_dir) / job["workspace_id"] / "exports"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{job_id}.{fmt}"
+        artifact_key = f"{job['workspace_id']}/exports/{job_id}.{fmt}"
+        out_path = self._artifacts.open_write_stream(artifact_key)
 
-        if fmt == "json":
-            payload_bytes = json.dumps([r["data"] for r in rows], default=str).encode("utf-8")
-        elif fmt == "jsonl":
-            lines = [json.dumps({"id": r["id"], "data": r["data"]}, default=str) for r in rows]
-            payload_bytes = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
-        else:
-            buf = io.StringIO()
-            keys = sorted({k for r in rows for k in r.get("data", {})})
-            writer = csv.DictWriter(buf, fieldnames=["id", *keys])
-            writer.writeheader()
-            for r in rows:
-                row_dict = {"id": r["id"]}
-                for k in keys:
-                    row_dict[k] = sanitize_csv_cell(r.get("data", {}).get(k))
-                writer.writerow(row_dict)
-            payload_bytes = buf.getvalue().encode("utf-8")
+        exported = 0
+        csv_keys: list[str] | None = None
 
-        out_path.write_bytes(payload_bytes)
-        checksum = hashlib.sha256(payload_bytes).hexdigest()
+        with out_path.open("w", encoding="utf-8", newline="") as f:
+            if fmt == "json":
+                f.write("[")
+                first = True
+                for batch in self._iter_export_batches(
+                    workspace_id=job["workspace_id"],
+                    project_id=params["project_id"],
+                    collection_id=collection_id,
+                    mongo_filter=mongo_filter,
+                ):
+                    for r in batch:
+                        if not first:
+                            f.write(",")
+                        f.write(json.dumps(r["data"], default=str))
+                        first = False
+                        exported += 1
+                f.write("]")
+            elif fmt == "jsonl":
+                for batch in self._iter_export_batches(
+                    workspace_id=job["workspace_id"],
+                    project_id=params["project_id"],
+                    collection_id=collection_id,
+                    mongo_filter=mongo_filter,
+                ):
+                    for r in batch:
+                        f.write(json.dumps({"id": r["id"], "data": r["data"]}, default=str) + "\n")
+                        exported += 1
+            else:
+                schema_props = col.get("schema_json", {}).get("properties", {})
+                if isinstance(schema_props, dict) and schema_props:
+                    csv_keys = sorted(schema_props.keys())
+                writer: csv.DictWriter[str] | None = None
+                for batch in self._iter_export_batches(
+                    workspace_id=job["workspace_id"],
+                    project_id=params["project_id"],
+                    collection_id=collection_id,
+                    mongo_filter=mongo_filter,
+                ):
+                    if writer is None:
+                        if csv_keys is None:
+                            csv_keys = sorted({k for r in batch for k in r.get("data", {})})
+                        writer = csv.DictWriter(
+                            f, fieldnames=["id", *csv_keys], extrasaction="ignore"
+                        )
+                        writer.writeheader()
+                    for r in batch:
+                        row_dict = {"id": r["id"]}
+                        for k in csv_keys or []:
+                            row_dict[k] = sanitize_csv_cell(r.get("data", {}).get(k))
+                        writer.writerow(row_dict)
+                        exported += 1
 
+        checksum, byte_count = self._artifacts.finalize_stream(out_path)
         final = self._jobs.update_state(
             job_id,
             "completed",
-            progress={
-                "processed": len(rows),
-                "succeeded": len(rows),
-                "failed": 0,
-                "total": len(rows),
-            },
+            progress={"processed": exported, "succeeded": exported, "failed": 0, "total": exported},
             output_ref={
-                "path": str(out_path),
+                "artifact_key": artifact_key,
                 "format": fmt,
                 "sha256": checksum,
-                "bytes": len(payload_bytes),
+                "bytes": byte_count,
+                "complete": True,
             },
             finished_at=utc_now(),
         )
@@ -185,7 +237,11 @@ class ExportService:
         if job["state"] != "completed" or not job.get("output_ref"):
             raise ValidationError("Export job has not completed")
         ref = job["output_ref"]
-        path = Path(ref["path"])
-        if not path.exists():
-            raise NotFoundError("Export artifact not found")
+        key = ref.get("artifact_key")
+        if key:
+            path = self._artifacts.get_path(key)
+        else:
+            path = Path(ref["path"])
+            if not path.exists():
+                raise NotFoundError("Export artifact not found")
         return path, ref["format"], ref["sha256"]

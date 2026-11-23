@@ -2,6 +2,8 @@ services:
   mongo:
     image: mongo:7.0
     restart: unless-stopped
+    networks:
+      - dc_internal
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -13,6 +15,8 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
+    networks:
+      - dc_internal
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -23,12 +27,17 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
       MONGODB_URI: mongodb://mongo:27017/
       REDIS_URL: redis://redis:6379/0
+      STORAGE_DIR: /app/var/storage
+    volumes:
+      - artifacts_data:/app/var/storage
+    networks:
+      - dc_internal
     depends_on:
       mongo:
         condition: service_healthy
@@ -40,7 +49,7 @@ services:
     restart: unless-stopped
     command: ["dc-mcp-http"]
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     env_file:
       - .env
     environment:
@@ -48,6 +57,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       MCP_HOST: 0.0.0.0
       MCP_PORT: "8001"
+      STORAGE_DIR: /app/var/storage
+    volumes:
+      - artifacts_data:/app/var/storage
+    networks:
+      - dc_internal
     depends_on:
       mongo:
         condition: service_healthy
@@ -63,11 +77,38 @@ services:
     environment:
       MONGODB_URI: mongodb://mongo:27017/
       REDIS_URL: redis://redis:6379/0
+      STORAGE_DIR: /app/var/storage
+    volumes:
+      - artifacts_data:/app/var/storage
+    networks:
+      - dc_internal
     depends_on:
       mongo:
         condition: service_healthy
       redis:
         condition: service_healthy
 
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    networks:
+      - dc_internal
+    depends_on:
+      - api
+      - mcp-http
+
+networks:
+  dc_internal:
+    driver: bridge
+
 volumes:
   mongo_data:
+  artifacts_data:
+  caddy_data:

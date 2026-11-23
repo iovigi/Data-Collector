@@ -11,6 +11,7 @@ from pymongo import MongoClient
 
 from data_collector.api.errors import register_error_handlers
 from data_collector.api.middleware import register_middleware
+from data_collector.api.openapi import build_openapi_spec
 from data_collector.api.v1 import create_v1_blueprint
 from data_collector.config import Settings, get_settings
 from data_collector.container import Container, build_container
@@ -77,25 +78,7 @@ def create_app(
 
     @app.get("/api/v1/openapi.json")
     def openapi_spec() -> tuple[Response, int]:
-        paths: dict[str, Any] = {}
-        for rule in app.url_map.iter_rules():
-            if not rule.rule.startswith("/api/v1"):
-                continue
-            methods = [m for m in (rule.methods or set()) if m not in {"HEAD", "OPTIONS"}]
-            path_item: dict[str, Any] = {}
-            for m in methods:
-                path_item[m.lower()] = {
-                    "operationId": rule.endpoint,
-                    "responses": {"200": {"description": "Success"}},
-                }
-            paths[rule.rule] = path_item
-        return jsonify(
-            {
-                "openapi": "3.1.0",
-                "info": {"title": "Data Collector API", "version": "2.0.0"},
-                "paths": paths,
-            }
-        ), 200
+        return jsonify(build_openapi_spec(app)), 200
 
     return app
 

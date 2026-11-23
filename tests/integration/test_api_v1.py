@@ -41,7 +41,7 @@ def test_health_and_openapi(api_ctx):
     assert client.get("/health/ready").status_code == 200
     spec = client.get("/api/v1/openapi.json").get_json()
     assert spec["openapi"] == "3.1.0"
-    assert "/api/v1/collections/<cid>/records" in spec["paths"]
+    assert "/api/v1/collections/{cid}/records" in spec["paths"]
 
 
 def test_auth_login_uniform_failure_and_refresh_replay(api_ctx):

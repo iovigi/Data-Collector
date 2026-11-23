@@ -1,0 +1,14 @@
+{$DOMAIN:collector.example.com} {
+    encode zstd gzip
+
+    @mcp path /mcp* /.well-known/* /oauth/*
+    handle @mcp {
+        reverse_proxy mcp-http:8001 {
+            flush_interval -1
+        }
+    }
+
+    handle {
+        reverse_proxy api:8000
+    }
+}

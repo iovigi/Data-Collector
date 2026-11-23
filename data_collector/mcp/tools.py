@@ -276,6 +276,26 @@ def build_mcp_server(container: Container) -> FastMCP:
 
         return _run("dc_get_job", _exec)
 
+    @mcp.tool()
+    def dc_list_saved_queries(collection_id: str) -> dict[str, Any]:
+        """List saved queries for an authorized collection (read-only)."""
+
+        def _exec() -> dict[str, Any]:
+            actor = get_mcp_actor()
+            return {"items": container.saved_queries.list_for_collection(actor, collection_id)}
+
+        return _run("dc_list_saved_queries", _exec)
+
+    @mcp.tool()
+    def dc_run_saved_query(saved_query_id: str, cursor: str | None = None) -> dict[str, Any]:
+        """Execute a saved query safely under caller permissions."""
+
+        def _exec() -> dict[str, Any]:
+            actor = get_mcp_actor()
+            return container.saved_queries.run(actor, saved_query_id, cursor=cursor)
+
+        return _run("dc_run_saved_query", _exec)
+
     # MCP Resources
     @mcp.resource("dc://workspaces/{wid}/projects/{pid}/collections")
     def resource_collections(wid: str, pid: str) -> str:

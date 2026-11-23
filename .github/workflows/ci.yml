@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main, "feat/**", "hardening/**"]
   pull_request:
     branches: [main]
 
@@ -29,9 +29,40 @@ jobs:
       - name: Pip audit
         run: pip-audit
 
+  real-db-integration:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+    env:
+      APP_ENV: test
+      MONGODB_URI: mongodb://127.0.0.1:27017/
+      MONGODB_DB: data_collector_ci
+      REDIS_URL: redis://127.0.0.1:6379/0
+      JWT_SECRET_KEY: ci-integration-jwt-secret-key-32-bytes-minimum
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run real MongoDB + Redis smoke test
+        run: |
+          data-collector ensure-indexes
+          pytest tests/integration -q
+
   docker-build:
     runs-on: ubuntu-latest
-    needs: quality-and-tests
+    needs: [quality-and-tests, real-db-integration]
     steps:
       - uses: actions/checkout@v4
       - name: Build container image

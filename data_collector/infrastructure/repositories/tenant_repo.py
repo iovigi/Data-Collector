@@ -306,6 +306,12 @@ class RefreshTokenRepository:
     def find_by_hash(self, token_hash: str) -> dict[str, Any] | None:
         return self._col.find_one({"token_hash": token_hash})
 
+    def consume_if_active(self, token_hash: str) -> dict[str, Any] | None:
+        return self._col.find_one_and_update(
+            {"token_hash": token_hash, "revoked_at": None},
+            {"$set": {"revoked_at": utc_now()}},
+        )
+
     def revoke_hash(self, token_hash: str) -> None:
         self._col.update_one({"token_hash": token_hash}, {"$set": {"revoked_at": utc_now()}})
 

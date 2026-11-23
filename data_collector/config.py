@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     export_sync_max_records: int = Field(default=1000, ge=1)
 
     # MCP & OAuth
+    oauth_mode: Literal["builtin", "external"] = Field(default="builtin")
+    oauth_jwks_url: str = Field(default="")
+    oauth_rsa_private_key_pem: str = Field(default="")
     mcp_public_url: str = Field(default="http://127.0.0.1:8001/mcp")
     mcp_host: str = Field(default="127.0.0.1")
     mcp_port: int = Field(default=8001, ge=1, le=65535)

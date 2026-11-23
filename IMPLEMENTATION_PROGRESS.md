@@ -1,19 +1,14 @@
 # Data Collector 2.0 — Implementation Progress
 
-**Branch:** `feat/data-collector-2.0`  
-**Baseline SHA:** `e18eaa61a052ed62666183a5b5f85bf334b8f20b`  
+**Branch:** `hardening/production-readiness`  
+**Base SHA:** `7bd8d4b663111077d7b1a616a1a916d8883bdaa4`  
 **Updated:** 2026-11-23
 
-## Milestone Checklist
-- [x] **M0** — Audit and baseline (`current-state.md`, `target-state.md`, `threat-model.md`, `ADR-001`, baseline tests)
-- [x] **M1** — Security emergency fixes (removed default admin seeding & weak fallback JWT secret, added `admin bootstrap` CLI, fail-fast config, strict CORS, generic error handler, disabled unsafe legacy `/api/*` by default)
-- [x] **M2** — Application service architecture (`data_collector/` layered package, `MongoManager` pooling, `RedisManager`, DI `Container`, repositories)
-- [x] **M3** — Multi-tenancy, RBAC, collection/schema registry (workspaces, projects, collections with JSON Schema 2020-12, shared `records` collection with mandatory tenant predicates)
-- [x] **M4** — Data API v1 + query DSL (`/api/v1/*`, Safe Query DSL AST compiler, HMAC-bound keyset cursors, optimistic concurrency, soft delete/restore, idempotency)
-- [x] **M5** — Authentication hardening and key management (Argon2id + bcrypt migration, short-lived JWTs, refresh rotation + replay revocation, scoped API keys, scrubbed audit trail)
-- [x] **M6** — Background jobs + import/export (RQ worker `dc-worker`, JSON/JSONL/CSV import with row errors, async export with CSV formula sanitization + SHA-256)
-- [x] **M7** — MCP local stdio / core read tools (`dc-mcp-stdio`, `FastMCP` tools, resources, prompts, response size caps)
-- [x] **M8** — MCP remote HTTP + OAuth + write tools (`dc-mcp-http`, Streamable HTTP `/mcp`, RFC 9728/8414 OAuth metadata, origin/auth middleware, two-stage signed delete intent)
-- [x] **M9** — Production packaging, CI/CD, telemetry (`Dockerfile`, `compose.yaml`, `.github/workflows/ci.yml`, `/health/live`, `/health/ready`, `/metrics`, runbooks)
-- [x] **M10** — Release candidate verification (unit/integration/security/contract test suite, `ruff`, `mypy`, `bandit` verified locally)
-- [ ] **M11** — P1 enhancements (deferred post-`v1.0.0` per plan: saved queries, webhooks, schema migration assistant, usage analytics)
+## Hardening Workstreams
+- [x] **Workstream A** — OAuth 2.1 (`builtin` RS256/PKCE S256 + `external` JWKS), RFC 9728/8414/7591 metadata, pure ASGI `MCPAuthASGIMiddleware`, concurrent isolation tests
+- [x] **Workstream B** — `allowed_collection_ids` enforcement on `CollectionService`, atomic refresh token consumption, SSRF validator (`validate_outbound_url`)
+- [x] **Workstream C** — `ArtifactStore` (`LocalVolumeArtifactStore`), shared `artifacts_data` volume in `compose.yaml`, keyset-paginated streaming export (>10,500 records verified across restart)
+- [x] **Workstream D** — Complete OpenAPI 3.1.0 generator (`data_collector/api/openapi.py`) with Pydantic component schemas & security schemes
+- [x] **Workstream E** — Caddy TLS reverse proxy (`deploy/caddy/Caddyfile`), internal Docker network, real MongoDB+Redis CI stage (`.github/workflows/ci.yml`), deployment & MCP guides
+- [x] **Workstream F (M11)** — Saved Queries (REST + MCP), Webhooks (SSRF-safe + HMAC-SHA256), Schema Migration Assistant (preview + apply), Usage Analytics
+- [x] **Final Qualification** — `39 passed`, `ruff` 0 errors, `mypy` 0 errors (56 files), `bandit` 0 medium/high, `pip-audit` 0 CVEs, `docker build` green; `PRODUCTION_READINESS_REPORT.md` published
