@@ -469,6 +469,39 @@ def test_async_import_export_executed_by_windows_worker(tmp_path):
     assert exp_job["state"] == "completed", exp_job
 
 
+def test_stream_less_server_detection_and_rq_result_shim():
+    import redis as redis_lib
+    from data_collector.workers.main import disable_rq_stream_results, server_supports_streams
+    from rq.results import Result
+
+    class NoStreams:
+        def execute_command(self, *args):
+            raise redis_lib.ResponseError("unknown command 'XLEN'")
+
+    class OtherError:
+        def execute_command(self, *args):
+            raise redis_lib.ResponseError("WRONGTYPE Operation against a key")
+
+    assert server_supports_streams(fakeredis.FakeRedis()) is True
+    assert server_supports_streams(NoStreams()) is False
+    with pytest.raises(redis_lib.ResponseError):
+        server_supports_streams(OtherError())
+
+    original = Result.save
+    try:
+        disable_rq_stream_results()
+
+        class Boom:
+            def __getattr__(self, name):
+                raise AssertionError(f"Redis must not be touched ({name})")
+
+        res = Result.__new__(Result)
+        res.connection = Boom()
+        assert res.save(ttl=60, pipeline=Boom()) is None
+    finally:
+        Result.save = original  # type: ignore[method-assign]
+
+
 def test_enqueue_failure_marks_job_failed_and_returns_503(tmp_path):
     class NoQueueRedis(fakeredis.FakeRedis):
         def pipeline(self, *a, **k):

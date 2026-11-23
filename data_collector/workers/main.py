@@ -41,6 +41,36 @@ class WindowsSimpleWorker(SimpleWorker):
     death_penalty_class = TimerDeathPenalty
 
 
+def server_supports_streams(redis_client: Any) -> bool:
+    """True unless the server rejects stream commands (e.g. Microsoft Garnet)."""
+    from redis.exceptions import ResponseError
+
+    try:
+        redis_client.execute_command("XLEN", "dc:probe:streams")
+    except ResponseError as exc:
+        if "unknown command" in str(exc).lower():
+            return False
+        raise
+    return True
+
+
+def disable_rq_stream_results() -> None:
+    """Make RQ's per-job result record (a Redis Stream, ``XADD``) a no-op.
+
+    RQ 2.x writes a stream entry for every finished/failed job and has no switch to turn
+    that off; on a server without Streams the ``XADD`` fails *after* the job ran and kills
+    the worker. Data Collector never reads RQ results - job state, progress, errors and
+    artifacts are tracked in MongoDB by the services - so skipping them loses nothing.
+    Queueing, registries and worker heartbeats use lists/sets/sorted sets only.
+    """
+    from rq.results import Result
+
+    def _skip_save(self: Any, ttl: Any, pipeline: Any = None) -> None:  # noqa: ARG001
+        return None
+
+    Result.save = _skip_save  # type: ignore[method-assign]
+
+
 def build_worker(redis_client: Any, *, windows: bool | None = None) -> Worker:
     is_windows = (os.name == "nt") if windows is None else windows
     cls: type[Worker] = WindowsSimpleWorker if is_windows else Worker
@@ -76,6 +106,10 @@ def main() -> None:
     if not redis_mgr.ping():
         logger.error("Redis is unreachable; worker cannot start")
         sys.exit(2)
+
+    if not server_supports_streams(redis_mgr.client):
+        disable_rq_stream_results()
+        logger.warning("Redis server has no Streams support; RQ result records disabled")
 
     stop = threading.Event()
     threading.Thread(
