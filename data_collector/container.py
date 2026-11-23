@@ -8,6 +8,7 @@ from typing import Any
 from pymongo import MongoClient
 
 from data_collector.config import Settings, get_settings
+from data_collector.infrastructure.job_queue import JobQueue
 from data_collector.infrastructure.mongo import MongoManager
 from data_collector.infrastructure.oauth import OAuthService
 from data_collector.infrastructure.redis import RedisManager
@@ -69,6 +70,7 @@ class Container:
     schema_migrations: SchemaMigrationService
     usage_analytics: UsageAnalyticsService
     admin_ext: AdminExtensionService
+    job_queue: JobQueue | None = None
 
     def close(self) -> None:
         self.mongo.close()
@@ -202,4 +204,5 @@ def build_container(
         schema_migrations=schema_migrations,
         usage_analytics=usage_analytics,
         admin_ext=admin_ext,
+        job_queue=JobQueue(redis_mgr.client, jobs) if cfg.jobs_async else None,
     )

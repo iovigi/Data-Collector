@@ -94,6 +94,20 @@ class Settings(BaseSettings):
     # Metrics
     metrics_auth_token: str = Field(default="")
 
+    # Async jobs: when true the API enqueues import/export jobs to Redis (RQ) for the
+    # independent worker process instead of executing them inside the web request.
+    jobs_async: bool = Field(default=False)
+
+    # Python BFF for the Admin UI (IIS-native single-origin hosting)
+    web_session_secret: str = Field(default="")
+    web_session_ttl_seconds: int = Field(default=604800, ge=300, le=2592000)
+    web_dist_dir: str = Field(default="")
+    # Trust CF-Connecting-IP only when the TCP peer is inside Cloudflare's published ranges.
+    trust_cloudflare_client_ip: bool = Field(default=False)
+    log_dir: str = Field(default="")
+    # Serve /mcp + OAuth inside the same WSGI process (stateless JSON Streamable HTTP).
+    mcp_http_in_process: bool = Field(default=False)
+
     @field_validator("app_env", mode="before")
     @classmethod
     def _normalize_env(cls, v: object) -> str:
@@ -147,6 +161,14 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "OAUTH_JWKS_URL (https://) is required in production when OAUTH_MODE=external"
                 )
+            web_secret = self.web_session_secret.strip()
+            if web_secret and (
+                web_secret in _WEAK_SECRETS or len(web_secret) < 32 or web_secret == secret
+            ):
+                raise ValueError(
+                    "WEB_SESSION_SECRET must be >= 32 characters, non-default and distinct "
+                    "from JWT_SECRET_KEY in production"
+                )
         else:
             if not secret:
                 # Ephemeral per-process random fallback only for dev/test when unset;
@@ -173,6 +195,10 @@ class Settings(BaseSettings):
 
         if not self.intent_secret_key.strip():
             object.__setattr__(self, "intent_secret_key", self.jwt_secret_key)
+
+        if not self.web_session_secret.strip() and self.app_env != "production":
+            # dev/test only: ephemeral per-process secret (production must configure one)
+            object.__setattr__(self, "web_session_secret", os.urandom(32).hex())
 
         return self
 

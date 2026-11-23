@@ -112,15 +112,35 @@ class MCPAuthASGIMiddleware:
             reset_mcp_actor(token)
 
 
+def public_transport_security(cfg: Settings) -> Any:
+    """DNS-rebinding protection bound to the public MCP host (e.g. behind IIS/Cloudflare)."""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    host = urlparse(cfg.mcp_public_url).netloc
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[host],
+        allowed_origins=list(cfg.allowed_origins),
+    )
+
+
 def create_mcp_http_app(
     settings: Settings | None = None,
     *,
     container: Container | None = None,
+    stateless_http: bool = False,
+    json_response: bool = False,
+    transport_security: Any | None = None,
 ) -> Starlette:
     """Create Starlette ASGI app serving Streamable HTTP `/mcp` and OAuth 2.1 endpoints."""
     cfg = settings or get_settings()
     ctr = container or build_container(cfg)
-    mcp = build_mcp_server(ctr)
+    mcp = build_mcp_server(
+        ctr,
+        stateless_http=stateless_http,
+        json_response=json_response,
+        transport_security=transport_security,
+    )
     mcp_asgi = mcp.streamable_http_app()
 
     async def oauth_protected_resource(request: Request) -> JSONResponse:  # noqa: ARG001

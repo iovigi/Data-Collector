@@ -49,7 +49,8 @@ def register_middleware(app: Flask, container: Container) -> None:
             resp.headers["X-Request-Id"] = req_id
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["X-Frame-Options"] = "DENY"
-        resp.headers["Cache-Control"] = "no-store"
+        # Everything is no-store unless a route explicitly opted in (hashed static assets).
+        resp.headers["Cache-Control"] = getattr(g, "dc_cache_control", None) or "no-store"
         return resp
 
 

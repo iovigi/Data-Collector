@@ -21,8 +21,15 @@ def create_import(cid: str) -> ResponseReturnValue:
     if not raw:
         raise BadRequestError("Import payload body is required")
     idem = request.headers.get("Idempotency-Key")
-    job = get_container().import_service.submit_import(
-        actor, cid, raw_bytes=raw, fmt=fmt, dry_run=dry_run, idempotency_key=idem
+    container = get_container()
+    job = container.import_service.submit_import(
+        actor,
+        cid,
+        raw_bytes=raw,
+        fmt=fmt,
+        dry_run=dry_run,
+        idempotency_key=idem,
+        rq_queue=container.job_queue,
     )
     return jsonify(job), 202
 
@@ -34,7 +41,10 @@ def create_export(cid: str) -> ResponseReturnValue:
     body = request.get_json(silent=True) or {}
     fmt = str(body.get("format", "jsonl"))
     filter_ast = body.get("filter")
-    job = get_container().export_service.submit_export(actor, cid, fmt=fmt, filter_ast=filter_ast)
+    container = get_container()
+    job = container.export_service.submit_export(
+        actor, cid, fmt=fmt, filter_ast=filter_ast, rq_queue=container.job_queue
+    )
     return jsonify(job), 202
 
 

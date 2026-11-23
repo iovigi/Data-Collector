@@ -40,11 +40,16 @@ dev = [
     "pytest-cov>=6.0.0",
     "pytest-asyncio>=0.24.0",
     "mongomock>=4.2.0",
-    "fakeredis>=2.26.0",
+    "fakeredis[lua]>=2.26.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "bandit>=1.7.10",
     "pip-audit>=2.7.3",
+]
+# Windows IIS FastCGI hosting (docs/operations/IIS_DEPLOYMENT_REPORT.md)
+iis = [
+    "wfastcgi==3.0.0",
+    "a2wsgi>=1.10.0,<2.0",
 ]
 
 [project.scripts]

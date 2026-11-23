@@ -21,8 +21,29 @@ def reset_mcp_actor(token: Token[Actor | None]) -> None:
     _mcp_actor_var.reset(token)
 
 
+def _actor_from_sdk_request() -> Actor | None:
+    """Actor attached by MCPAuthASGIMiddleware to the HTTP request that carried this message.
+
+    The MCP SDK sets ``request_ctx`` for every JSON-RPC message it handles, including the
+    originating Starlette ``Request``. This is per-message and does not depend on how the
+    SDK schedules tasks (stateful vs stateless), so it is preferred over the contextvar.
+    """
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+    except ImportError:  # pragma: no cover - SDK layout change
+        return None
+    ctx = request_ctx.get(None)
+    request = getattr(ctx, "request", None)
+    scope = getattr(request, "scope", None)
+    if isinstance(scope, dict):
+        candidate = scope.get("dc_actor")
+        if isinstance(candidate, Actor):
+            return candidate
+    return None
+
+
 def get_mcp_actor() -> Actor:
-    actor = _mcp_actor_var.get()
+    actor = _actor_from_sdk_request() or _mcp_actor_var.get()
     if actor is None:
         raise AuthenticationError("Unauthenticated MCP request")
     return actor
