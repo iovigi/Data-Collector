@@ -71,10 +71,14 @@ function Sync-FastCgi {
     }
     if (-not (@($apps) | Where-Object { [string]$_['fullPath'] -eq $FcgiPython -and [string]$_['arguments'] -eq $FcgiScript })) {
         $n = $apps.CreateElement('application')
-        $n['fullPath'] = $FcgiPython; $n['arguments'] = $FcgiScript
-        $n['maxInstances'] = [uint32]4; $n['idleTimeout'] = [uint32]1800; $n['activityTimeout'] = [uint32]300
-        $n['requestTimeout'] = [uint32]330; $n['instanceMaxRequests'] = [uint32]10000
-        $n['signalBeforeTerminateSeconds'] = [uint32]10
+        $n.SetAttributeValue('fullPath', $FcgiPython); $n.SetAttributeValue('arguments', $FcgiScript)
+        # schema type uint: the PowerShell indexer would re-box these as Int32 (DISP_E_TYPEMISMATCH)
+        $n.SetAttributeValue('maxInstances', [uint32]4)
+        $n.SetAttributeValue('idleTimeout', [uint32]1800)
+        $n.SetAttributeValue('activityTimeout', [uint32]300)
+        $n.SetAttributeValue('requestTimeout', [uint32]330)
+        $n.SetAttributeValue('instanceMaxRequests', [uint32]10000)
+        $n.SetAttributeValue('signalBeforeTerminateSeconds', [uint32]10)
         [void]$apps.Add($n); $changed = $true
     }
     if ($changed) { $sm.CommitChanges(); Write-Host '   FastCGI registration updated (server-wide change)' }
