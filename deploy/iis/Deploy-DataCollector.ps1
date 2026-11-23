@@ -184,7 +184,7 @@ function Activate([string]$rel) {
     Restart-WebAppPool -Name $SiteName -ErrorAction SilentlyContinue
     Restart-Service $WorkerService
     Test-Release
-    Set-Content (Join-Path $SiteRoot 'CURRENT') (Split-Path $rel -Leaf) -Encoding ASCII
+    Set-Content (Join-Path $SiteRoot 'ACTIVE_RELEASE.txt') (Split-Path $rel -Leaf) -Encoding ASCII
 }
 
 # ------------------------------------------------------------------------------------- main
@@ -194,7 +194,7 @@ Run "`"$appcmd`" add backup `"$backup`"" | Out-Null
 Write-Host "   IIS backup: $backup  (restore: appcmd restore backup `"$backup`")"
 
 if ($Rollback) {
-    $current = (Get-Content (Join-Path $SiteRoot 'CURRENT') -ErrorAction Stop).Trim()
+    $current = (Get-Content (Join-Path $SiteRoot 'ACTIVE_RELEASE.txt') -ErrorAction Stop).Trim()
     $prev = Get-ChildItem $Releases -Directory | Sort-Object Name -Descending | Where-Object { $_.Name -lt $current } | Select-Object -First 1
     if (-not $prev) { throw "No release older than $current to roll back to" }
     Activate $prev.FullName
