@@ -124,6 +124,7 @@ function Set-Acls {
 }
 
 function Ensure-Site {
+    New-Item -ItemType Directory -Force $WwwRoot | Out-Null
     if (-not (Test-Path "IIS:\AppPools\$SiteName")) {
         New-WebAppPool -Name $SiteName | Out-Null
     }
