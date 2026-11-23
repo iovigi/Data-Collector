@@ -15,6 +15,9 @@ from data_collector.domain.exceptions import DomainError
 @click.group()
 def main() -> None:
     """Data Collector 2.0 administration CLI."""
+    from data_collector.hosting.env import load_deployment_env
+
+    load_deployment_env()  # honours DC_ENV_FILE (IIS/Windows service deployments)
 
 
 @main.group()
