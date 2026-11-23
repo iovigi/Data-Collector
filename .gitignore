@@ -1,5 +1,6 @@
 # Virtual Environment
 venv/
+.venv/
 env/
 ENV/
 
@@ -35,4 +36,7 @@ wheels/
 *.swo
 
 # Logs
-*.log 
+*.log
+.pytest_tmp/
+var/
+.coverage
