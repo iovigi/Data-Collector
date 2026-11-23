@@ -25,6 +25,7 @@ from data_collector.infrastructure.repositories.tenant_repo import (
     WorkspaceRepository,
 )
 from data_collector.infrastructure.storage import ArtifactStore, LocalVolumeArtifactStore
+from data_collector.services.admin_ext_service import AdminExtensionService
 from data_collector.services.audit_service import AuditService
 from data_collector.services.auth_service import AuthService
 from data_collector.services.collection_service import CollectionService
@@ -67,6 +68,7 @@ class Container:
     webhooks: WebhookService
     schema_migrations: SchemaMigrationService
     usage_analytics: UsageAnalyticsService
+    admin_ext: AdminExtensionService
 
     def close(self) -> None:
         self.mongo.close()
@@ -161,6 +163,16 @@ def build_container(
         audit=audit_service,
     )
     usage_analytics = UsageAnalyticsService(db=db, workspaces=workspaces)
+    admin_ext = AdminExtensionService(
+        db=db,
+        users=users,
+        workspaces=workspaces,
+        projects=projects,
+        collections=collections,
+        collection_service=collection_service,
+        audit=audit_service,
+        allow_localhost_dev=(cfg.app_env != "production"),
+    )
 
     return Container(
         settings=cfg,
@@ -189,4 +201,5 @@ def build_container(
         webhooks=webhooks,
         schema_migrations=schema_migrations,
         usage_analytics=usage_analytics,
+        admin_ext=admin_ext,
     )

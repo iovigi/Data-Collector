@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from flask import Blueprint
 
+from data_collector.api.v1.admin_ext import admin_ext_bp
 from data_collector.api.v1.audit import audit_bp
 from data_collector.api.v1.auth import auth_bp
 from data_collector.api.v1.collections import collections_bp
@@ -26,4 +27,5 @@ def create_v1_blueprint() -> Blueprint:
     v1.register_blueprint(keys_bp)
     v1.register_blueprint(audit_bp)
     v1.register_blueprint(m11_bp)
+    v1.register_blueprint(admin_ext_bp)
     return v1

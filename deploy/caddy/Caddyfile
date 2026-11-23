@@ -8,7 +8,17 @@
         }
     }
 
-    handle {
+    @bff path /api/auth/* /api/backend/*
+    handle @bff {
+        reverse_proxy web:3000
+    }
+
+    @api path /api/v1/* /health/*
+    handle @api {
         reverse_proxy api:8000
+    }
+
+    handle {
+        reverse_proxy web:3000
     }
 }
