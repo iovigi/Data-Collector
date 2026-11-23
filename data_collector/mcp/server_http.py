@@ -6,6 +6,7 @@ from typing import Any
 
 import uvicorn
 from starlette.applications import Starlette
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -83,7 +84,7 @@ def create_mcp_http_app(
             Mount("/", app=mcp_asgi),
         ]
     )
-    app.middleware("http")(auth_and_origin_middleware)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=auth_and_origin_middleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.allowed_origins,
