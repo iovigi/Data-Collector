@@ -72,9 +72,9 @@ function Sync-FastCgi {
     if (-not (@($apps) | Where-Object { [string]$_['fullPath'] -eq $FcgiPython -and [string]$_['arguments'] -eq $FcgiScript })) {
         $n = $apps.CreateElement('application')
         $n['fullPath'] = $FcgiPython; $n['arguments'] = $FcgiScript
-        $n['maxInstances'] = 4; $n['idleTimeout'] = 1800; $n['activityTimeout'] = 300
-        $n['requestTimeout'] = 330; $n['instanceMaxRequests'] = 10000
-        $n['signalBeforeTerminateSeconds'] = 10
+        $n['maxInstances'] = [uint32]4; $n['idleTimeout'] = [uint32]1800; $n['activityTimeout'] = [uint32]300
+        $n['requestTimeout'] = [uint32]330; $n['instanceMaxRequests'] = [uint32]10000
+        $n['signalBeforeTerminateSeconds'] = [uint32]10
         [void]$apps.Add($n); $changed = $true
     }
     if ($changed) { $sm.CommitChanges(); Write-Host '   FastCGI registration updated (server-wide change)' }
