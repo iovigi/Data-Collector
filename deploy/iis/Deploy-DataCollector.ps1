@@ -52,33 +52,43 @@ function Run([string]$cmd) {
     return $out
 }
 
-function Get-FastCgiArgs([string]$rel) {
-    $py = Join-Path $rel 'venv\Scripts\python.exe'
-    $wf = Join-Path $rel 'venv\Lib\site-packages\wfastcgi.py'
-    return @{ Python = $py; Wfastcgi = $wf }
+# IIS FastCGI applications live in a *server-wide* section of applicationHost.config;
+# changing it recycles every site's worker process. The registered paths therefore point at
+# the stable junction <SiteRoot>\current (-> active release) and never change between
+# releases: switching a release only repoints the junction and rewrites this site's web.config.
+$Current = Join-Path $SiteRoot 'current'
+$FcgiPython = Join-Path $Current 'venv\Scripts\python.exe'
+$FcgiScript = Join-Path $Current 'venv\Lib\site-packages\wfastcgi.py'
+
+function Sync-FastCgi {
+    # One commit: add the stable entry if missing, drop any legacy per-release entries.
+    Add-Type -Path "$env:windir\system32\inetsrv\Microsoft.Web.Administration.dll"
+    $sm = New-Object Microsoft.Web.Administration.ServerManager
+    $apps = $sm.GetApplicationHostConfiguration().GetSection('system.webServer/fastCgi').GetCollection()
+    $changed = $false
+    foreach ($e in @($apps)) {
+        if ([string]$e['fullPath'] -like "$Releases\*") { $apps.Remove($e); $changed = $true }
+    }
+    if (-not (@($apps) | Where-Object { [string]$_['fullPath'] -eq $FcgiPython -and [string]$_['arguments'] -eq $FcgiScript })) {
+        $n = $apps.CreateElement('application')
+        $n['fullPath'] = $FcgiPython; $n['arguments'] = $FcgiScript
+        $n['maxInstances'] = 4; $n['idleTimeout'] = 1800; $n['activityTimeout'] = 300
+        $n['requestTimeout'] = 330; $n['instanceMaxRequests'] = 10000
+        $n['signalBeforeTerminateSeconds'] = 10
+        [void]$apps.Add($n); $changed = $true
+    }
+    if ($changed) { $sm.CommitChanges(); Write-Host '   FastCGI registration updated (server-wide change)' }
 }
 
-function Register-FastCgi([string]$rel) {
-    $f = Get-FastCgiArgs $rel
-    $exists = & $appcmd list config -section:system.webServer/fastCgi | Select-String -SimpleMatch "fullPath=`"$($f.Python)`""
-    if (-not $exists) {
-        Run "`"$appcmd`" set config -section:system.webServer/fastCgi /+`"[fullPath='$($f.Python)',arguments='$($f.Wfastcgi)',maxInstances='4',idleTimeout='1800',activityTimeout='300',requestTimeout='330',instanceMaxRequests='10000',protocol='NamedPipe',signalBeforeTerminateSeconds='10']`" /commit:apphost" | Out-Null
-    }
-}
-
-function Unregister-FastCgi([string]$rel) {
-    $f = Get-FastCgiArgs $rel
-    $exists = & $appcmd list config -section:system.webServer/fastCgi | Select-String -SimpleMatch "fullPath=`"$($f.Python)`""
-    if ($exists) {
-        Run "`"$appcmd`" set config -section:system.webServer/fastCgi /-`"[fullPath='$($f.Python)',arguments='$($f.Wfastcgi)']`" /commit:apphost" | Out-Null
-    }
+function Set-CurrentRelease([string]$rel) {
+    if (Test-Path $Current) { cmd /c "rmdir `"$Current`"" | Out-Null }   # removes the junction only
+    Run "mklink /J `"$Current`" `"$rel`"" | Out-Null
 }
 
 function Write-WebConfig([string]$rel) {
-    $f = Get-FastCgiArgs $rel
     $tpl = Get-Content (Join-Path $rel 'app\deploy\iis\web.config.template') -Raw
-    $xml = $tpl.Replace('{{PYTHON}}', $f.Python).Replace('{{WFASTCGI}}', $f.Wfastcgi).
-        Replace('{{APP_DIR}}', (Join-Path $rel 'app')).Replace('{{WEB_DIST}}', (Join-Path $rel 'web-dist')).
+    $xml = $tpl.Replace('{{PYTHON}}', $FcgiPython).Replace('{{WFASTCGI}}', $FcgiScript).
+        Replace('{{APP_DIR}}', (Join-Path $Current 'app')).Replace('{{WEB_DIST}}', (Join-Path $Current 'web-dist')).
         Replace('{{ENV_FILE}}', $EnvFile).Replace('{{RELEASE}}', (Split-Path $rel -Leaf))
     $tmp = Join-Path $WwwRoot 'web.config.new'
     [IO.File]::WriteAllText($tmp, $xml, (New-Object Text.UTF8Encoding($false)))
@@ -86,7 +96,8 @@ function Write-WebConfig([string]$rel) {
 }
 
 function Set-Worker([string]$rel) {
-    $exe = Join-Path $rel 'venv\Scripts\dc-worker.exe'
+    $rel = $Current   # the service always runs the active release through the junction
+    $exe = Join-Path $rel 'venv\Scripts\python.exe'
     $logs = Join-Path $DataRoot 'logs'
     if (-not (Get-Service $WorkerService -ErrorAction SilentlyContinue)) {
         Run "`"$Nssm`" install $WorkerService `"$exe`"" | Out-Null
@@ -104,6 +115,7 @@ function Set-Worker([string]$rel) {
         Run "`"$Nssm`" set $WorkerService AppRestartDelay 5000" | Out-Null
     }
     Run "`"$Nssm`" set $WorkerService Application `"$exe`"" | Out-Null
+    Run "`"$Nssm`" set $WorkerService AppParameters `"-m data_collector.workers`"" | Out-Null
     Run "`"$Nssm`" set $WorkerService AppDirectory `"$(Join-Path $rel 'app')`"" | Out-Null
     Run "`"$Nssm`" set $WorkerService AppEnvironmentExtra `"DC_ENV_FILE=$EnvFile`" `"PYTHONPATH=$(Join-Path $rel 'app')`" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1" | Out-Null
 }
@@ -161,7 +173,8 @@ function Test-Release {
 
 function Activate([string]$rel) {
     Step "Activating $(Split-Path $rel -Leaf)"
-    Register-FastCgi $rel
+    Set-CurrentRelease $rel
+    Sync-FastCgi
     Write-WebConfig $rel
     Set-Worker $rel
     Restart-WebAppPool -Name $SiteName -ErrorAction SilentlyContinue
@@ -233,7 +246,6 @@ Activate $rel
 Step 'Pruning old releases'
 $keep = Get-ChildItem $Releases -Directory | Sort-Object Name -Descending | Select-Object -First $KeepReleases
 Get-ChildItem $Releases -Directory | Where-Object { $keep.FullName -notcontains $_.FullName } | ForEach-Object {
-    Unregister-FastCgi $_.FullName
     Remove-Item $_.FullName -Recurse -Force
     Write-Host "   removed $($_.Name)"
 }

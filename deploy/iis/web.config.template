@@ -48,7 +48,7 @@
           <add fileExtension=".key" allowed="false" />
           <add fileExtension=".py" allowed="false" />
           <add fileExtension=".pyc" allowed="false" />
-          <add fileExtension=".config" allowed="false" />
+          <!-- .config is already denied at server level (adding it again = HTTP 500.19) -->
           <add fileExtension=".conf" allowed="false" />
           <add fileExtension=".bak" allowed="false" />
           <add fileExtension=".log" allowed="false" />
