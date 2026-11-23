@@ -6,7 +6,7 @@ const PASSWORD = process.env.E2E_USER_PASSWORD || "StrongE2EPassword123!";
 test("login -> onboarding -> project -> collection -> record -> logout", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Email address").fill(EMAIL);
-  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();
 
   await page.waitForURL(/\/(onboarding\/create-workspace|w\/)/);

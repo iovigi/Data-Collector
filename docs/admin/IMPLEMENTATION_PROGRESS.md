@@ -1,6 +1,6 @@
 # Admin Dashboard Implementation Progress
 
-**Branch:** `feat/admin-dashboard`  
+**Branch:** `main`  
 **Baseline SHA:** `91f1decc4481d44a78f3225de873e3815ec13f18`  
 **Updated:** 2026-11-23
 
@@ -11,4 +11,4 @@
 - [x] **S4–S7** — Login, onboarding, overview, projects, collections, Data Explorer (SafeQueryAST, cursors, 409 conflict, Trash, Import/Export), schema migrations, saved queries & jobs
 - [x] **S8–S11** — Members & invitations, API keys (one-time reveal), MCP Connections Center, webhooks, audit log, analytics, settings & developer API reference
 - [x] **S12–S13** — Light/dark parity, responsive shell, `web/Dockerfile`, `compose.yaml` + Caddy routing, CI frontend job
-- [x] **S14** — Backend (`45 passed`), Frontend (`typecheck`, `lint`, `vitest` 6 passed, `next build`), `docker compose config` verified
+- [x] **S14** — Backend (`45 passed`), Frontend (`typecheck`, `lint`, `vitest` 6 passed, `next build`), Playwright E2E + axe (`2 passed`), `docker build` (`data-collector-web:ci`), and `.gitignore` fix restoring `web/lib/` to Git tree verified

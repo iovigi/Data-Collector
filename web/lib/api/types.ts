@@ -1,0 +1,198 @@
+export interface MeResponse {
+  principal_id: string;
+  principal_type: string;
+  email: string | null;
+  workspace_id: string | null;
+  scopes: string[] | null;
+}
+
+export interface Workspace {
+  id: string;
+  slug: string;
+  name: string;
+  owner_id: string;
+  status: string;
+  created_at: string;
+}
+
+export interface WorkspaceCapabilities {
+  workspace_id: string;
+  role: "owner" | "admin" | "editor" | "viewer";
+  scopes: string[];
+  allowed_collection_ids: string[] | null;
+  features: {
+    can_manage_workspace: boolean;
+    can_manage_members: boolean;
+    can_create_keys: boolean;
+    can_manage_collections: boolean;
+    can_write_records: boolean;
+    can_delete_records: boolean;
+    can_create_jobs: boolean;
+    can_export: boolean;
+    can_read_audit: boolean;
+    can_manage_webhooks: boolean;
+  };
+}
+
+export interface Project {
+  id: string;
+  workspace_id: string;
+  slug: string;
+  name: string;
+  status: string;
+  created_at: string;
+}
+
+export interface Collection {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  slug: string;
+  schema_json: Record<string, unknown>;
+  schema_version: number;
+  searchable_fields: string[];
+  sortable_fields: string[];
+  retention_days: number;
+  status: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface RecordItem {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  collection_id: string;
+  data: Record<string, unknown>;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  deleted_at: string | null;
+  source?: Record<string, unknown>;
+}
+
+export type FilterOp = "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "exists" | "contains";
+
+export type SafeFilterNode =
+  | { and: SafeFilterNode[] }
+  | { or: SafeFilterNode[] }
+  | { not: SafeFilterNode }
+  | { field: string; op: FilterOp; value: unknown };
+
+export interface SearchRecordsResponse {
+  items: RecordItem[];
+  next_cursor: string | null;
+  has_more: boolean;
+  limit: number;
+}
+
+export interface JobItem {
+  id: string;
+  workspace_id: string;
+  initiator_id: string;
+  type: "import" | "export";
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  progress: { processed: number; succeeded: number; failed: number; total: number };
+  params: Record<string, unknown>;
+  output_ref?: Record<string, unknown> | null;
+  errors?: Array<{ row?: number; error?: string }>;
+  error_summary?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface ApiKeyItem {
+  id: string;
+  workspace_id: string;
+  principal_id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  allowed_collection_ids: string[] | null;
+  expires_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  api_key?: string;
+}
+
+export interface AuditEvent {
+  id: string;
+  tenant: string | null;
+  actor: string;
+  action: string;
+  target: string;
+  decision: string;
+  request_id: string | null;
+  timestamp: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface WorkspaceMember {
+  id: string;
+  principal_id: string;
+  email: string | null;
+  role: "owner" | "admin" | "editor" | "viewer";
+  joined_at: string;
+}
+
+export interface InvitationItem {
+  id: string;
+  workspace_id: string;
+  email: string;
+  role: string;
+  status: string;
+  created_at: string;
+  expires_at: string;
+  invite_token?: string;
+}
+
+export interface SavedQuery {
+  id: string;
+  workspace_id: string;
+  collection_id: string;
+  name: string;
+  filter: SafeFilterNode | null;
+  sort: Array<{ field: string; direction: "asc" | "desc" }> | null;
+  fields: string[] | null;
+  limit: number;
+  version: number;
+  created_at: string;
+}
+
+export interface WebhookItem {
+  id: string;
+  workspace_id: string;
+  name: string;
+  url: string;
+  events: string[];
+  status: "active" | "disabled";
+  created_at: string;
+  signing_secret?: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  delivery_id: string;
+  webhook_id: string;
+  event: string;
+  status: string;
+  http_status: number;
+  created_at: string;
+}
+
+export interface DashboardSummary {
+  workspace_id: string;
+  counts: {
+    records_active: number;
+    projects: number;
+    collections: number;
+    jobs_completed: number;
+    jobs_failed: number;
+    audit_events: number | null;
+  };
+  recent_projects: Project[];
+  recent_jobs: JobItem[];
+}
