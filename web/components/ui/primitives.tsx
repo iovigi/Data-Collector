@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useState } from "react";
 import { AlertTriangle, Check, Copy, Lock, ShieldAlert, X } from "lucide-react";
 import { ApiError } from "@/lib/api/errors";

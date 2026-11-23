@@ -1,8 +1,6 @@
-"use client";
-
 import React, { useEffect, useState } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { Link } from "@/lib/router";
+import { usePathname, useRouter } from "@/lib/router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,

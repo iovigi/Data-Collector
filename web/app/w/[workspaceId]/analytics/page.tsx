@@ -1,7 +1,5 @@
-"use client";
-
 import React from "react";
-import { useParams } from "next/navigation";
+import { useParams } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
 import { AppShell } from "@/components/layout/AppShell";

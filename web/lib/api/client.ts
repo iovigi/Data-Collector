@@ -8,6 +8,11 @@ function readCookie(name: string): string {
   return match ? decodeURIComponent(match.split("=").slice(1).join("=")) : "";
 }
 
+/** CSRF double-submit token: `__Host-dc_csrf` in production (HTTPS), `dc_csrf` in dev. */
+export function readCsrfToken(): string {
+  return readCookie("__Host-dc_csrf") || readCookie("dc_csrf");
+}
+
 export interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
@@ -22,7 +27,7 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
 
   if (method !== "GET") {
-    const csrf = readCookie("dc_csrf");
+    const csrf = readCsrfToken();
     if (csrf) {
       headers["X-CSRF-Token"] = csrf;
     }
@@ -64,7 +69,7 @@ export async function apiAuthPost<T>(
   body?: unknown
 ): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const csrf = readCookie("dc_csrf");
+  const csrf = readCsrfToken();
   if (csrf) {
     headers["X-CSRF-Token"] = csrf;
   }

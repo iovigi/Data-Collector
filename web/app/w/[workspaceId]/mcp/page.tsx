@@ -1,8 +1,6 @@
-"use client";
-
 import React from "react";
-import Link from "next/link";
-import { useParams } from "next/navigation";
+import { Link } from "@/lib/router";
+import { useParams } from "@/lib/router";
 import { AppShell } from "@/components/layout/AppShell";
 import { Badge, Button, Card, CopyButton, PageHeader } from "@/components/ui/primitives";
 

@@ -1,28 +1,31 @@
-import { describe, expect, it } from "vitest";
-import { createCsrfToken, sanitizeReturnPath, verifyCsrfToken } from "@/lib/auth/csrf";
-import { isAllowedBackendPath } from "@/lib/api/allowlist";
+import { afterEach, describe, expect, it } from "vitest";
+import { sanitizeReturnPath } from "@/lib/auth/returnPath";
+import { readCsrfToken } from "@/lib/api/client";
 
-describe("BFF security helpers", () => {
-  it("validates double-submit CSRF tokens in constant time", () => {
-    const tok = createCsrfToken();
-    expect(verifyCsrfToken(tok, tok)).toBe(true);
-    expect(verifyCsrfToken(tok, "tampered.sig")).toBe(false);
-    expect(verifyCsrfToken(undefined, tok)).toBe(false);
-  });
+// CSRF token creation/verification and the backend path allowlist moved to the Python BFF
+// (data_collector/bff) and are covered by tests/integration/test_iis_bff.py.
+
+function clearCookies() {
+  for (const c of document.cookie.split("; ")) {
+    const name = c.split("=")[0];
+    if (name) document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+}
+
+describe("browser security helpers", () => {
+  afterEach(clearCookies);
 
   it("blocks open redirects in return paths", () => {
     expect(sanitizeReturnPath("/w/123/overview")).toBe("/w/123/overview");
     expect(sanitizeReturnPath("https://evil.example.com")).toBe("/");
     expect(sanitizeReturnPath("//evil.example.com")).toBe("/");
+    expect(sanitizeReturnPath("/\\evil.example.com")).toBe("/");
+    expect(sanitizeReturnPath(null)).toBe("/");
   });
 
-  it("enforces strict BFF path allowlist", () => {
-    const wid = "507f1f77bcf86cd799439011";
-    expect(isAllowedBackendPath("me")).toBe(true);
-    expect(isAllowedBackendPath(`workspaces/${wid}/capabilities`)).toBe(true);
-    expect(isAllowedBackendPath(`collections/${wid}/records/search`)).toBe(true);
-    expect(isAllowedBackendPath("http://evil.example/steal")).toBe(false);
-    expect(isAllowedBackendPath("../internal/system")).toBe(false);
-    expect(isAllowedBackendPath("internal/admin")).toBe(false);
+  it("reads the double-submit CSRF cookie", () => {
+    expect(readCsrfToken()).toBe("");
+    document.cookie = "dc_csrf=abc.def; path=/";
+    expect(readCsrfToken()).toBe("abc.def");
   });
 });

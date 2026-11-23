@@ -1,7 +1,5 @@
-"use client";
-
 import React, { useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
 import type { ApiKeyItem, WorkspaceCapabilities } from "@/lib/api/types";

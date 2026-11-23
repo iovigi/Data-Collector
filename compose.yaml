@@ -34,6 +34,8 @@ services:
       MONGODB_URI: mongodb://mongo:27017/
       REDIS_URL: redis://redis:6379/0
       STORAGE_DIR: /app/var/storage
+      JOBS_ASYNC: "true"
+      # WEB_SESSION_SECRET must be set in .env (>= 32 chars, distinct from JWT_SECRET_KEY)
     volumes:
       - artifacts_data:/app/var/storage
     networks:
@@ -88,23 +90,6 @@ services:
       redis:
         condition: service_healthy
 
-  web:
-    build:
-      context: ./web
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:3000:3000"
-    environment:
-      NODE_ENV: production
-      DATA_COLLECTOR_API_INTERNAL_URL: http://api:8000
-      SESSION_REDIS_URL: redis://redis:6379/1
-      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production-32-chars!!}
-    networks:
-      - dc_internal
-    depends_on:
-      - api
-      - redis
-
   caddy:
     image: caddy:2-alpine
     profiles: ["tls"]
@@ -120,7 +105,6 @@ services:
     depends_on:
       - api
       - mcp-http
-      - web
 
 networks:
   dc_internal:

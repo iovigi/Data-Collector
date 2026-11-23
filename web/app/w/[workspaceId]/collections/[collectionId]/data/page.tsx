@@ -1,8 +1,6 @@
-"use client";
-
 import React, { useMemo, useState } from "react";
-import Link from "next/link";
-import { useParams } from "next/navigation";
+import { Link } from "@/lib/router";
+import { useParams } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   flexRender,

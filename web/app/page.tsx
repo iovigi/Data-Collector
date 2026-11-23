@@ -1,7 +1,5 @@
-"use client";
-
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/router";
 import { apiFetch } from "@/lib/api/client";
 import type { Workspace } from "@/lib/api/types";
 

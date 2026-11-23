@@ -1,8 +1,6 @@
-"use client";
-
 import React from "react";
-import Link from "next/link";
-import { useParams } from "next/navigation";
+import { Link } from "@/lib/router";
+import { useParams } from "@/lib/router";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
 import type { Collection, Project } from "@/lib/api/types";

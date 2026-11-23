@@ -1,11 +1,9 @@
-"use client";
-
 import React, { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "@/lib/router";
 import { Eye, EyeOff, Activity } from "lucide-react";
 import { apiAuthPost } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
-import { sanitizeReturnPath } from "@/lib/auth/csrf";
+import { sanitizeReturnPath } from "@/lib/auth/returnPath";
 import { Button, Card, Input } from "@/components/ui/primitives";
 
 function LoginForm() {
