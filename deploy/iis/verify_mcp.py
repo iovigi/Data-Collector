@@ -82,9 +82,27 @@ def oauth_login(base: str, email: str, password: str, label: str) -> dict[str, A
     return {"client": c, "client_id": client_id, **tok.json()}
 
 
+PIN: dict[str, str] = {}  # hostname -> IP (set by --resolve)
+
+
+class PinnedAsyncTransport(httpx.AsyncHTTPTransport):
+    """Connect to a pinned IP while keeping the real hostname for TLS SNI and Host.
+
+    The async stack resolves DNS outside socket.getaddrinfo, so --resolve is applied here.
+    """
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if host in PIN:
+            request.extensions = {**request.extensions, "sni_hostname": host}
+            request.url = request.url.copy_with(host=PIN[host])
+        return await super().handle_async_request(request)
+
+
 async def mcp_session(base: str, token: str, probe_col: str) -> tuple[list[str], dict, dict]:
     async with (
-        httpx.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=60) as http,
+        httpx.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=60,
+                          transport=PinnedAsyncTransport()) as http,
         streamable_http_client(f"{base}/mcp", http_client=http) as (read, write, _),
         ClientSession(read, write) as session,
     ):
@@ -189,6 +207,7 @@ def main() -> int:
     if a.resolve:
         real = socket.getaddrinfo
         host = urlparse(base).hostname
+        PIN[host or ""] = a.resolve
         socket.getaddrinfo = lambda h, *x, **k: real(a.resolve if h == host else h, *x, **k)  # type: ignore[assignment]
     try:
         run(base)
