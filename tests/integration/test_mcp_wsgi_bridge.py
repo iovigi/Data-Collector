@@ -170,6 +170,12 @@ def test_transport_semantics(wsgi_mcp):
     assert asm["code_challenge_methods_supported"] == ["S256"]
     assert "keys" in httpx.get(f"{base}/.well-known/jwks.json").json()
 
+    # Malformed bodies are client errors, never 500
+    bad = {"Content-Type": "application/json"}
+    assert httpx.post(f"{base}/oauth/register", content=b"{not json", headers=bad).status_code == 400
+    assert httpx.post(f"{base}/oauth/register", content=b"[1,2]", headers=bad).status_code == 400
+    assert httpx.post(f"{base}/oauth/token", content=b"{nope", headers=bad).status_code == 400
+
     # Flask side of the same process still serves the REST API
     assert httpx.get(f"{base}/api/v1/openapi.json").status_code == 200
     assert httpx.get(f"{base}/health/ready").status_code == 200

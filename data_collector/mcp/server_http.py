@@ -112,6 +112,24 @@ class MCPAuthASGIMiddleware:
             reset_mcp_actor(token)
 
 
+async def _read_body(request: Request) -> dict[str, Any] | None:
+    """JSON or form body as a dict; None when malformed (callers answer 400, never 500)."""
+    try:
+        if "application/json" in request.headers.get("content-type", ""):
+            data = await request.json()
+            return data if isinstance(data, dict) else None
+        return dict(await request.form())
+    except Exception:  # malformed JSON / multipart
+        return None
+
+
+def _bad_body() -> JSONResponse:
+    return JSONResponse(
+        {"error": "invalid_request", "error_description": "Malformed request body"},
+        status_code=400,
+    )
+
+
 def public_transport_security(cfg: Settings) -> Any:
     """DNS-rebinding protection bound to the public MCP host (e.g. behind IIS/Cloudflare)."""
     from mcp.server.transport_security import TransportSecuritySettings
@@ -156,13 +174,32 @@ def create_mcp_http_app(
         return JSONResponse({"status": "live"})
 
     async def oauth_register(request: Request) -> JSONResponse:
-        ctr.redis.rate_limiter.check(
-            f"oauth_reg:{request.client.host if request.client else 'unknown'}",
-            20,
-            is_mutation=True,
-        )
+        try:
+            ctr.redis.rate_limiter.check(
+                f"oauth_reg:{request.client.host if request.client else 'unknown'}",
+                20,
+                is_mutation=True,
+            )
+        except DomainError as exc:  # rate limited / limiter unavailable -> 429 / 503, not 500
+            headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+            return JSONResponse(
+                {"error": exc.code, "error_description": exc.message},
+                status_code=exc.http_status,
+                headers=headers,
+            )
         try:
             body = await request.json()
+        except ValueError:
+            return JSONResponse(
+                {"error": "invalid_client_metadata", "error_description": "Body must be JSON"},
+                status_code=400,
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"error": "invalid_client_metadata", "error_description": "Body must be an object"},
+                status_code=400,
+            )
+        try:
             res = ctr.oauth_service.register_client(
                 client_name=str(body.get("client_name", "mcp-client")),
                 redirect_uris=list(body.get("redirect_uris", [])),
@@ -231,12 +268,9 @@ def create_mcp_http_app(
         return resp
 
     async def oauth_authorize_post(request: Request) -> Any:
-        ctype = request.headers.get("content-type", "")
-        if "application/json" in ctype:
-            data = await request.json()
-        else:
-            form_data = await request.form()
-            data = dict(form_data)
+        data = await _read_body(request)
+        if data is None:
+            return _bad_body()
 
         cookie_csrf = request.cookies.get("dc_oauth_csrf", "")
         form_csrf = str(data.get("csrf_token", ""))
@@ -308,12 +342,9 @@ def create_mcp_http_app(
             )
 
     async def oauth_token(request: Request) -> JSONResponse:
-        ctype = request.headers.get("content-type", "")
-        if "application/json" in ctype:
-            data = await request.json()
-        else:
-            form_data = await request.form()
-            data = dict(form_data)
+        data = await _read_body(request)
+        if data is None:
+            return _bad_body()
         try:
             grant_type = str(data.get("grant_type", ""))
             if grant_type == "authorization_code":
