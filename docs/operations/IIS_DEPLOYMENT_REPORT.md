@@ -16,7 +16,7 @@ Cloudflare mode specified by owner: Flexible (explicitly accepted for initial de
 | Gate | Status | Evidence |
 |---|---|---|
 | Backend/API | PASS | `verify_deployment.py` 53/53 through Cloudflare HTTPS |
-| Dashboard UI | PASS (HTTP-level) / Playwright NOT_RUN | SPA, deep links, assets, CSP verified; browser installed, specs not yet run |
+| Dashboard UI | PASS | Playwright (Chromium, public HTTPS): 5/5 — dashboard journey, logged-out redirect, logged-in deep-link refresh, cookie flags, mobile viewport + axe |
 | Login/BFF/session/CSRF | PASS | __Host- HttpOnly Secure cookies, session-bound CSRF, Origin checks, logout revokes family |
 | MongoDB | PASS | shared 127.0.0.1:27017, new DB `data_collector`, indexes created |
 | Redis | PASS | Garnet 2.2.9 service (virtual account, auth, AOF); sessions survive restart |
@@ -27,7 +27,8 @@ Cloudflare mode specified by owner: Flexible (explicitly accepted for initial de
 
 Backend tests / count: 66 passed (45 pre-existing + 21 new)
 Frontend tests / count: 5 Vitest passed; typecheck + ESLint clean
-Playwright tests / count: NOT_RUN (Chromium installed; run `npx playwright test` with `PLAYWRIGHT_BASE_URL=https://data.devart.solutions` and E2E creds)
+Playwright tests / count: 5 passed against https://data.devart.solutions (`PLAYWRIGHT_BASE_URL`, `PLAYWRIGHT_HOST_RESOLVER="MAP data.devart.solutions <edge-ip>"`, `E2E_USER_EMAIL/PASSWORD`)
+Backups: scheduled task `DataCollector-backup` daily 03:30 as SYSTEM → `C:\ProgramData\DataCollector\backups` (mongodump gzip archive, artifacts zip, env copy; 14-day retention). Restore rehearsal 2026-11-24: 237 documents / 17 collections restored into a scratch DB, all counts matched, scratch DB dropped.
 Security / ACL / Host header tests: `.git`, `.env`, `web.config`, sources, maps → 404; foreign Host → not routed to app; secrets folder admin/SYSTEM + per-identity read; release dirs RX only.
 IIS website binding and ports: `*:80:data.devart.solutions` only (HTTP, Cloudflare Flexible).
 Backup/rollback locations: IIS config backups `appcmd list backup` (`DataCollector-*`); last 3 releases in `C:\Sites\DataCollector\releases`; rollback `deploy\iis\Deploy-DataCollector.ps1 -Rollback`.
@@ -46,7 +47,8 @@ Backup/rollback locations: IIS config backups `appcmd list backup` (`DataCollect
 - wfastcgi is unmaintained by Microsoft; works on 3.12.10 as tested.
 - MCP is stateless JSON-only (no SSE/GET stream); production OAuth accepts https redirect URIs only (loopback clients such as Claude Code / MCP Inspector cannot register).
 - Mongo jobs from the two lost test imports remain `queued` in archived test workspaces.
-- No scheduled MongoDB/artifact backup yet.
+- Backups stay on the same disk; copy `C:\ProgramData\DataCollector\backups` off the server (encrypted) — owner action.
+- Test accounts `e2e-owner@` / `e2e-viewer@devart.solutions` remain (passwords in the secrets folder) for re-running the verifiers; disable them if not wanted.
 
 ## Cloudflare checklist for the owner
 - DNS proxied (already true). Enable **Always Use HTTPS** (currently http is not redirected at the edge).
@@ -55,5 +57,5 @@ Backup/rollback locations: IIS config backups `appcmd list backup` (`DataCollect
 - Later: SSL mode Full (strict) with an origin certificate; firewall origin to Cloudflare IP ranges.
 
 STAGING_GO: YES
-PRODUCTION_GO: YES, conditional on running the Playwright browser specs and adding a backup schedule
-Next precise operator actions: run Playwright specs; schedule mongodump + artifacts backup; owner Cloudflare items above; add MCP connector in Claude/ChatGPT and test.
+PRODUCTION_GO: YES (Flexible origin transport owner-accepted)
+Next precise operator actions: owner Cloudflare items above; off-server copy of backups; add the MCP connector in Claude/ChatGPT and test it there.
