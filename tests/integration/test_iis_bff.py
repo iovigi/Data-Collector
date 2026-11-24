@@ -469,6 +469,45 @@ def test_async_import_export_executed_by_windows_worker(tmp_path):
     assert exp_job["state"] == "completed", exp_job
 
 
+def test_polling_worker_never_blocks_server_side_and_stops_promptly():
+    import time as _time
+
+    from data_collector.infrastructure.job_queue import QUEUE_NAME
+    from data_collector.workers.main import run_polling
+    from rq import Queue
+
+    class NoBlockingRedis(fakeredis.FakeRedis):
+        def blpop(self, *a, **k):  # a blocked waiter is what Garnet mishandles
+            raise AssertionError("worker must not use BLPOP")
+
+        def blmove(self, *a, **k):
+            raise AssertionError("worker must not use BLMOVE")
+
+    r = NoBlockingRedis()
+    q = Queue(QUEUE_NAME, connection=r)
+    jobs = [q.enqueue("time.sleep", 0) for _ in range(3)]
+    stop = threading.Event()
+    seen: dict[str, Any] = {}
+
+    def supervisor() -> None:  # RQ installs signal handlers, so the loop owns the main thread
+        deadline = _time.time() + 20
+        while _time.time() < deadline and not all(
+            j.get_status(refresh=True) == "finished" for j in jobs
+        ):
+            _time.sleep(0.2)
+        late = q.enqueue("time.sleep", 0)  # pushed while the loop idles
+        while _time.time() < deadline and late.get_status(refresh=True) != "finished":
+            _time.sleep(0.2)
+        seen["late"] = late
+        seen["stop_at"] = _time.time()
+        stop.set()
+
+    threading.Thread(target=supervisor, daemon=True).start()
+    run_polling(r, stop, windows=True)
+    assert _time.time() - seen["stop_at"] < 5
+    assert all(j.get_status(refresh=True) == "finished" for j in [*jobs, seen["late"]])
+
+
 def test_stream_less_server_detection_and_rq_result_shim():
     import redis as redis_lib
     from data_collector.workers.main import disable_rq_stream_results, server_supports_streams

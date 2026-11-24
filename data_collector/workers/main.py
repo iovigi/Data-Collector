@@ -77,6 +77,34 @@ def build_worker(redis_client: Any, *, windows: bool | None = None) -> Worker:
     return cls([QUEUE_NAME], connection=redis_client)
 
 
+POLL_INTERVAL_SECONDS = 1.0
+REGISTRY_MAINTENANCE_SECONDS = 600
+
+
+def run_polling(redis_client: Any, stop: threading.Event, *, windows: bool | None = None) -> None:
+    """Consume the queue with non-blocking dequeues only (RQ burst mode in a loop).
+
+    A worker blocked in ``BLPOP`` keeps a server-side waiter. Microsoft Garnet (2.2.x) keeps
+    that waiter after the client process dies and hands it the next pushed item, so the
+    first job after any worker restart/crash is silently lost. Burst mode dequeues with
+    plain ``LPOP``: no server-side waiter exists, nothing can be lost, and a stop request
+    is honoured within ~1 s instead of after the blocking timeout.
+    """
+    from rq.utils import now
+
+    last_maintenance = 0.0
+    while not stop.is_set():
+        worker = build_worker(redis_client, windows=windows)
+        if time.time() - last_maintenance < REGISTRY_MAINTENANCE_SECONDS:
+            worker.last_cleaned_at = now()  # registry cleanup only every 10 minutes
+        else:
+            last_maintenance = time.time()
+        worker.work(burst=True, with_scheduler=False, logging_level="WARNING")
+        if worker._stop_requested:  # SIGINT/SIGTERM during a job: warm shutdown done
+            break
+        stop.wait(POLL_INTERVAL_SECONDS)
+
+
 def run_maintenance_once(cfg: Settings, redis_client: Any) -> None:
     with contextlib.suppress(Exception):
         redis_client.bgsave()
@@ -116,12 +144,19 @@ def main() -> None:
         target=_maintenance_loop, args=(cfg, redis_mgr.client, stop), daemon=True
     ).start()
 
-    worker = build_worker(redis_mgr.client)
     logger.info(
-        "Worker starting",
-        extra={"extra_fields": {"worker_class": type(worker).__name__, "queue": QUEUE_NAME}},
+        "Worker starting (non-blocking polling)",
+        extra={
+            "extra_fields": {
+                "worker_class": type(build_worker(redis_mgr.client)).__name__,
+                "queue": QUEUE_NAME,
+                "poll_seconds": POLL_INTERVAL_SECONDS,
+            }
+        },
     )
     try:
-        worker.work(with_scheduler=False)
+        run_polling(redis_mgr.client, stop)
+    except KeyboardInterrupt:
+        logger.info("Worker stop requested")
     finally:
         stop.set()
