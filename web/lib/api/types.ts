@@ -32,6 +32,7 @@ export interface WorkspaceCapabilities {
     can_export: boolean;
     can_read_audit: boolean;
     can_manage_webhooks: boolean;
+    can_manage_all_mcp_connections?: boolean;
   };
 }
 
@@ -223,4 +224,78 @@ export interface DeleteCollectionResponse {
   jobs_cancelled: number;
   api_keys_detached: number;
   idempotency_keys_deleted: number;
+}
+
+export interface McpToken {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  workspace_id: string;
+  principal_id: string;
+  expires_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  token?: string;
+  read_only?: boolean;
+}
+
+export interface McpGrant {
+  id: string;
+  client_id: string;
+  client_name: string;
+  user_id: string;
+  email: string;
+  scopes: string[];
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface McpConnectionCheck {
+  mcp_url: string;
+  ok: boolean;
+  checks: Array<{ check: string; ok: boolean; detail: string; ms: number }>;
+  tools: string[];
+}
+
+export interface AggregateMetric {
+  op: "count" | "count_distinct" | "sum" | "avg" | "min" | "max" | "p50" | "fill_rate";
+  field?: string;
+  as?: string;
+}
+
+export interface AggregateResponse {
+  collection_id: string;
+  group_by: string[];
+  metrics: Array<{ op: string; field: string | null; as: string }>;
+  rows: Array<Record<string, unknown> & { group?: Record<string, unknown>; unknown_fields?: string[] }>;
+  truncated: boolean;
+  coverage: {
+    matched: number;
+    unknown: Record<string, number>;
+    freshness: { min_created_at: string | null; max_created_at: string | null };
+  };
+  notes: string[];
+}
+
+export interface HistogramResponse {
+  buckets: Array<{ bucket: string; start: string | null; count: number }>;
+  truncated: boolean;
+  coverage: { matched: number; unknown: Record<string, number> };
+}
+
+export interface FieldProfile {
+  field: string;
+  types: Record<string, number>;
+  fill_rate: number;
+  queryable: boolean;
+  groupable: boolean;
+  array_item_types?: Record<string, number>;
+}
+
+export interface FieldsResponse {
+  total_records: number;
+  sampled_records: number;
+  fields: FieldProfile[];
 }
