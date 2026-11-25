@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from data_collector.api.schemas import (
     AddMemberRequest,
+    AggregateRequest,
     BatchCreateRecordsRequest,
     CreateApiKeyRequest,
     CreateCollectionRequest,
@@ -18,6 +19,8 @@ from data_collector.api.schemas import (
     CreateWorkspaceRequest,
     DeleteCollectionRequest,
     DeleteRecordRequest,
+    DistinctValuesRequest,
+    HistogramRequest,
     LoginRequest,
     RefreshRequest,
     SearchRecordsRequest,
@@ -40,6 +43,9 @@ _MODELS: list[type[BaseModel]] = [
     DeleteRecordRequest,
     SearchRecordsRequest,
     CreateApiKeyRequest,
+    AggregateRequest,
+    DistinctValuesRequest,
+    HistogramRequest,
 ]
 
 _ENDPOINT_BODY_MAP: dict[str, str] = {
@@ -58,6 +64,9 @@ _ENDPOINT_BODY_MAP: dict[str, str] = {
     "api_v1.records_v1.delete_record": "DeleteRecordRequest",
     "api_v1.records_v1.search_records": "SearchRecordsRequest",
     "api_v1.keys_v1.create_key": "CreateApiKeyRequest",
+    "api_v1.analytics_v1.aggregate": "AggregateRequest",
+    "api_v1.analytics_v1.distinct_values": "DistinctValuesRequest",
+    "api_v1.analytics_v1.histogram": "HistogramRequest",
 }
 
 _PUBLIC_ENDPOINTS = frozenset(

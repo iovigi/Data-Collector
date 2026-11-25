@@ -50,6 +50,9 @@ def validate_field_name(field: str, allowed_fields: set[str] | None = None) -> s
         allowed_fields is not None
         and field not in allowed_fields
         and field not in BUILTIN_METADATA_FIELDS
+        # A dotted path inside an allowed top-level property (e.g. dc_event.observed_at
+        # when dc_event is a schema property) addresses the same data, so it is allowed.
+        and field.split(".", 1)[0] not in allowed_fields
     ):
         raise ValidationError(
             f"Field '{field}' is not in collection allowlist",

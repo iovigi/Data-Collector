@@ -43,6 +43,9 @@ jobs:
     env:
       APP_ENV: test
       MONGODB_URI: mongodb://127.0.0.1:27017/
+      # Real-MongoDB-only tests (aggregation pipelines); a separate name so a developer's
+      # MONGODB_URI never points tests at a real deployment.
+      DC_TEST_MONGODB_URI: mongodb://127.0.0.1:27017/
       MONGODB_DB: data_collector_ci
       REDIS_URL: redis://127.0.0.1:6379/0
       JWT_SECRET_KEY: ci-integration-jwt-secret-key-32-bytes-minimum

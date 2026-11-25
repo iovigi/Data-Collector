@@ -91,3 +91,24 @@ class CreateApiKeyRequest(BaseModel):
     scopes: list[str] = Field(min_length=1)
     allowed_collection_ids: list[str] | None = None
     expires_in_days: int = Field(default=90, ge=1, le=365)
+
+
+class AggregateRequest(BaseModel):
+    group_by: list[str] | None = Field(default=None, max_length=3)
+    metrics: list[dict[str, Any]] | None = Field(default=None, max_length=10)
+    filter: dict[str, Any] | None = None
+    having: list[dict[str, Any]] | None = Field(default=None, max_length=10)
+    sort: list[dict[str, Any]] | None = Field(default=None, max_length=4)
+    limit: int | None = Field(default=None, ge=1, le=500)
+
+
+class DistinctValuesRequest(BaseModel):
+    field: str = Field(min_length=1, max_length=128)
+    filter: dict[str, Any] | None = None
+    limit: int | None = Field(default=None, ge=1, le=200)
+
+
+class HistogramRequest(BaseModel):
+    date_field: str = Field(default="created_at", min_length=1, max_length=128)
+    interval: str = Field(default="day", pattern="^(day|week|month)$")
+    filter: dict[str, Any] | None = None

@@ -49,6 +49,12 @@ class ValidationError(DomainError):
     mcp_code = "INVALID_ARGUMENT"
 
 
+class QueryTooBroadError(ValidationError):
+    """An aggregation exceeded its time or memory budget; the caller should narrow it."""
+
+    code = "QUERY_TOO_BROAD"
+
+
 class BadRequestError(DomainError):
     code = "BAD_REQUEST"
     http_status = 400

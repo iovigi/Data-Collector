@@ -27,6 +27,7 @@ from data_collector.infrastructure.repositories.tenant_repo import (
 )
 from data_collector.infrastructure.storage import ArtifactStore, LocalVolumeArtifactStore
 from data_collector.services.admin_ext_service import AdminExtensionService
+from data_collector.services.analytics_service import AnalyticsService
 from data_collector.services.audit_service import AuditService
 from data_collector.services.auth_service import AuthService
 from data_collector.services.collection_deletion_service import CollectionDeletionService
@@ -72,6 +73,7 @@ class Container:
     schema_migrations: SchemaMigrationService
     usage_analytics: UsageAnalyticsService
     admin_ext: AdminExtensionService
+    analytics: AnalyticsService
     job_queue: JobQueue | None = None
 
     def close(self) -> None:
@@ -188,6 +190,8 @@ def build_container(
         allow_localhost_dev=(cfg.app_env != "production"),
     )
 
+    analytics = AnalyticsService(settings=cfg, db=db, collections=collection_service)
+
     return Container(
         settings=cfg,
         mongo=mongo,
@@ -218,4 +222,5 @@ def build_container(
         usage_analytics=usage_analytics,
         admin_ext=admin_ext,
         job_queue=JobQueue(redis_mgr.client, jobs) if cfg.jobs_async else None,
+        analytics=analytics,
     )

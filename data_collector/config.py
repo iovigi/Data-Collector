@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     max_query_page_size: int = Field(default=100, ge=1, le=500)
     default_query_page_size: int = Field(default=25, ge=1, le=100)
     max_query_time_ms: int = Field(default=5000, ge=100, le=30000)
+    # Server-side aggregations (dc_aggregate, analytics REST): per-query time budget.
+    analytics_max_time_ms: int = Field(default=15000, ge=100, le=60000)
     soft_delete_retention_days: int = Field(default=30, ge=1)
 
     # Storage & Exports
