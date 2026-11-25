@@ -215,3 +215,18 @@ class RecordRepository:
             return int(self._col.count_documents(query, maxTimeMS=max_time_ms))
         except TypeError:
             return int(self._col.count_documents(query))
+
+    def count_for_collection(self, *, workspace_id: str, collection_id: str) -> dict[str, int]:
+        """Active and trashed (soft-deleted) record counts for one collection."""
+        scope = {"workspace_id": workspace_id, "collection_id": collection_id}
+        active = int(self._col.count_documents({**scope, "deleted_at": None}))
+        trashed = int(self._col.count_documents({**scope, "deleted_at": {"$ne": None}}))
+        return {"active": active, "trashed": trashed, "total": active + trashed}
+
+    def delete_all_for_collection(self, *, workspace_id: str, collection_id: str) -> int:
+        """Hard-delete every record (active and trashed) of one collection in a single
+        deleteMany. Scoped by workspace_id AND collection_id; never call without both."""
+        if not workspace_id or not collection_id:
+            raise ValueError("workspace_id and collection_id are required")
+        res = self._col.delete_many({"workspace_id": workspace_id, "collection_id": collection_id})
+        return int(res.deleted_count)

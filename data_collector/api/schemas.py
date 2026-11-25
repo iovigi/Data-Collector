@@ -63,6 +63,11 @@ class UpdateRecordRequest(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class DeleteCollectionRequest(BaseModel):
+    confirmation_token: str = Field(min_length=1, max_length=4096)
+    confirm_slug: str = Field(min_length=1, max_length=64)
+
+
 class DeleteRecordRequest(BaseModel):
     expected_version: int = Field(ge=1)
 

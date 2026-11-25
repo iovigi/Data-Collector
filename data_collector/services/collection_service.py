@@ -172,7 +172,7 @@ class CollectionService:
         self, actor: Actor, collection_id: str, required_scope: Scope = Scope.COLLECTION_READ
     ) -> dict[str, Any]:
         col = self._collections.get_by_id(collection_id)
-        if col is None:
+        if col is None or col.get("status") == "deleting":
             raise NotFoundError("Collection not found")
         ws_id = col["workspace_id"]
         role = self._workspaces.get_membership_role(ws_id, actor.principal_id)

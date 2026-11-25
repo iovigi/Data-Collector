@@ -185,7 +185,13 @@ class CollectionRepository:
         self, workspace_id: str, project_id: str, limit: int = 50
     ) -> list[dict[str, Any]]:
         docs = list(
-            self._col.find({"workspace_id": workspace_id, "project_id": project_id})
+            self._col.find(
+                {
+                    "workspace_id": workspace_id,
+                    "project_id": project_id,
+                    "status": {"$ne": "deleting"},
+                }
+            )
             .sort("_id", 1)
             .limit(limit)
         )
@@ -221,6 +227,18 @@ class CollectionRepository:
             return_document=ReturnDocument.AFTER,
         )
         return serialize_doc(doc)
+
+    def set_status(self, workspace_id: str, collection_id: str, status: str) -> None:
+        self._col.update_one(
+            {"_id": to_object_id(collection_id, "collection_id"), "workspace_id": workspace_id},
+            {"$set": {"status": status, "updated_at": utc_now()}},
+        )
+
+    def delete(self, workspace_id: str, collection_id: str) -> int:
+        res = self._col.delete_one(
+            {"_id": to_object_id(collection_id, "collection_id"), "workspace_id": workspace_id}
+        )
+        return int(res.deleted_count)
 
 
 class ApiKeyRepository:
@@ -274,6 +292,25 @@ class ApiKeyRepository:
                 s.pop("key_hash", None)
                 out.append(s)
         return out
+
+    def count_restricted_to(self, workspace_id: str, collection_id: str) -> int:
+        return int(
+            self._col.count_documents(
+                {"workspace_id": workspace_id, "allowed_collection_ids": collection_id}
+            )
+        )
+
+    def detach_collection(self, workspace_id: str, collection_id: str) -> int:
+        """Remove a collection from every key allowlist in the workspace.
+
+        A key whose allowlist becomes empty keeps the empty list (access to nothing);
+        it must never fall back to `None`, which means "all collections".
+        """
+        res = self._col.update_many(
+            {"workspace_id": workspace_id, "allowed_collection_ids": collection_id},
+            {"$pull": {"allowed_collection_ids": collection_id}},
+        )
+        return int(res.modified_count)
 
     def revoke(self, workspace_id: str, key_id: str) -> dict[str, Any] | None:
         doc = self._col.find_one_and_update(

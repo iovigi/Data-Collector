@@ -6,7 +6,11 @@ from flask import Blueprint, jsonify, request
 from flask.typing import ResponseReturnValue
 
 from data_collector.api.middleware import get_container, get_current_actor, require_auth
-from data_collector.api.schemas import CreateCollectionRequest, UpdateCollectionRequest
+from data_collector.api.schemas import (
+    CreateCollectionRequest,
+    DeleteCollectionRequest,
+    UpdateCollectionRequest,
+)
 from data_collector.domain.exceptions import BadRequestError
 
 collections_bp = Blueprint("collections_v1", __name__)
@@ -66,3 +70,29 @@ def update_collection(cid: str) -> ResponseReturnValue:
         retention_days=dto.retention_days,
     )
     return jsonify(col), 200
+
+
+@collections_bp.post("/collections/<cid>/prepare-delete")
+@require_auth(is_mutation=False)
+def prepare_delete_collection(cid: str) -> ResponseReturnValue:
+    """Preflight: report what will be removed and issue a 5-minute confirmation token.
+
+    Counted as a read for rate limiting; it changes no data.
+    """
+    actor = get_current_actor()
+    return jsonify(get_container().collection_deletion.prepare(actor, cid)), 200
+
+
+@collections_bp.delete("/collections/<cid>")
+@require_auth(is_mutation=True)
+def delete_collection(cid: str) -> ResponseReturnValue:
+    """Hard-delete a collection, its records (active + trashed) and dependents.
+
+    One request = one write against the rate limiter, regardless of record count.
+    """
+    actor = get_current_actor()
+    dto = DeleteCollectionRequest.model_validate(_json_body())
+    res = get_container().collection_deletion.delete(
+        actor, cid, confirmation_token=dto.confirmation_token, confirm_slug=dto.confirm_slug
+    )
+    return jsonify(res), 200

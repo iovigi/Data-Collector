@@ -29,6 +29,7 @@ from data_collector.infrastructure.storage import ArtifactStore, LocalVolumeArti
 from data_collector.services.admin_ext_service import AdminExtensionService
 from data_collector.services.audit_service import AuditService
 from data_collector.services.auth_service import AuthService
+from data_collector.services.collection_deletion_service import CollectionDeletionService
 from data_collector.services.collection_service import CollectionService
 from data_collector.services.export_service import ExportService
 from data_collector.services.import_service import ImportService
@@ -60,6 +61,7 @@ class Container:
     audit_service: AuditService
     auth_service: AuthService
     collection_service: CollectionService
+    collection_deletion: CollectionDeletionService
     record_service: RecordService
     import_service: ImportService
     export_service: ExportService
@@ -118,6 +120,16 @@ def build_container(
         workspaces=workspaces,
         projects=projects,
         collections=collections,
+        audit=audit_service,
+    )
+    collection_deletion = CollectionDeletionService(
+        settings=cfg,
+        db=db,
+        workspaces=workspaces,
+        collections=collections,
+        records=records,
+        api_keys=api_keys,
+        delete_intents=delete_intents,
         audit=audit_service,
     )
     record_service = RecordService(
@@ -194,6 +206,7 @@ def build_container(
         audit_service=audit_service,
         auth_service=auth_service,
         collection_service=collection_service,
+        collection_deletion=collection_deletion,
         record_service=record_service,
         import_service=import_service,
         export_service=export_service,

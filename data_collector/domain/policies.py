@@ -27,6 +27,7 @@ def effective_scopes(actor: Actor, role: Role) -> frozenset[Scope]:
         mutating = {
             Scope.WORKSPACE_MANAGE,
             Scope.COLLECTION_MANAGE,
+            Scope.COLLECTION_DELETE,
             Scope.RECORDS_WRITE,
             Scope.RECORDS_DELETE,
             Scope.JOBS_CREATE,

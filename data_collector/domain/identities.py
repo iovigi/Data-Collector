@@ -24,6 +24,7 @@ class Scope(StrEnum):
     WORKSPACE_MANAGE = "workspace:manage"
     COLLECTION_READ = "collection:read"
     COLLECTION_MANAGE = "collection:manage"
+    COLLECTION_DELETE = "collection:delete"
     RECORDS_READ = "records:read"
     RECORDS_WRITE = "records:write"
     RECORDS_DELETE = "records:delete"
@@ -43,6 +44,7 @@ ROLE_SCOPES: dict[Role, frozenset[Scope]] = {
             Scope.WORKSPACE_READ,
             Scope.COLLECTION_READ,
             Scope.COLLECTION_MANAGE,
+            Scope.COLLECTION_DELETE,
             Scope.RECORDS_READ,
             Scope.RECORDS_WRITE,
             Scope.RECORDS_DELETE,

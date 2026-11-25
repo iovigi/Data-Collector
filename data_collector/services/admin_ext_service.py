@@ -82,6 +82,11 @@ class AdminExtensionService:
                 "can_manage_members": Scope.WORKSPACE_MANAGE in scopes,
                 "can_create_keys": Scope.KEYS_MANAGE in scopes,
                 "can_manage_collections": Scope.COLLECTION_MANAGE in scopes,
+                "can_delete_collections": (
+                    Scope.COLLECTION_DELETE in scopes
+                    and actor.allowed_collection_ids is None
+                    and not actor.is_mcp
+                ),
                 "can_write_records": Scope.RECORDS_WRITE in scopes,
                 "can_delete_records": Scope.RECORDS_DELETE in scopes,
                 "can_create_jobs": Scope.JOBS_CREATE in scopes,
