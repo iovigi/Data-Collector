@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import secrets
@@ -122,10 +123,9 @@ class WebSessionStore:
             self._write(sid, current)
             return current
         finally:
-            try:
+            # The lock may have expired; nothing to undo.
+            with contextlib.suppress(Exception):
                 lock.release()
-            except Exception:  # noqa: S110 - lock may have expired; nothing to undo
-                pass
 
     @staticmethod
     def needs_refresh(session: dict[str, Any]) -> bool:

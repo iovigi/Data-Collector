@@ -280,7 +280,10 @@ def test_redis_down_fails_closed(tmp_path, dist):
 
     settings = _settings(tmp_path)
     app = create_app(
-        settings, mongo_client=mongomock.MongoClient(), redis_client=DeadRedis(), ensure_indexes=True
+        settings,
+        mongo_client=mongomock.MongoClient(),
+        redis_client=DeadRedis(),
+        ensure_indexes=True,
     )
     register_iis_ui_and_bff(app, str(dist))
     app.extensions["container"].auth_service.register_user("c@example.com", PASSWORD)
@@ -314,7 +317,13 @@ def test_csrf_helpers():
 def test_spa_routes_assets_and_no_fallback_for_api(bff):
     app, _, _ = bff
     client = app.test_client()
-    for path in ("/", "/login", "/w/abc/overview", "/onboarding/create-workspace", "/developer/api"):
+    for path in (
+        "/",
+        "/login",
+        "/w/abc/overview",
+        "/onboarding/create-workspace",
+        "/developer/api",
+    ):
         r = client.get(path)
         assert r.status_code == 200, path
         assert r.mimetype == "text/html"
@@ -412,7 +421,10 @@ def test_async_import_export_executed_by_windows_worker(tmp_path):
     redis_client = fakeredis.FakeRedis()
     settings = _settings(tmp_path, jobs_async=True)
     app = create_app(
-        settings, mongo_client=mongomock.MongoClient(), redis_client=redis_client, ensure_indexes=True
+        settings,
+        mongo_client=mongomock.MongoClient(),
+        redis_client=redis_client,
+        ensure_indexes=True,
     )
     container = app.extensions["container"]
     assert container.job_queue is not None
@@ -422,9 +434,9 @@ def test_async_import_export_executed_by_windows_worker(tmp_path):
         "/api/v1/auth/login", json={"email": "ops@example.com", "password": PASSWORD}
     ).get_json()["access_token"]
     h = {"Authorization": f"Bearer {tok}"}
-    wid = client.post("/api/v1/workspaces", json={"slug": "jobs-ws", "name": "W"}, headers=h).get_json()[
-        "id"
-    ]
+    wid = client.post(
+        "/api/v1/workspaces", json={"slug": "jobs-ws", "name": "W"}, headers=h
+    ).get_json()["id"]
     pid = client.post(
         f"/api/v1/workspaces/{wid}/projects", json={"slug": "proj-a", "name": "P"}, headers=h
     ).get_json()["id"]
@@ -560,9 +572,9 @@ def test_enqueue_failure_marks_job_failed_and_returns_503(tmp_path):
         "/api/v1/auth/login", json={"email": "q@example.com", "password": PASSWORD}
     ).get_json()["access_token"]
     h = {"Authorization": f"Bearer {tok}"}
-    wid = client.post("/api/v1/workspaces", json={"slug": "queue-ws", "name": "W"}, headers=h).get_json()[
-        "id"
-    ]
+    wid = client.post(
+        "/api/v1/workspaces", json={"slug": "queue-ws", "name": "W"}, headers=h
+    ).get_json()["id"]
     pid = client.post(
         f"/api/v1/workspaces/{wid}/projects", json={"slug": "proj-b", "name": "P"}, headers=h
     ).get_json()["id"]

@@ -77,7 +77,11 @@ def build_mcp_wsgi(cfg: Settings, container: Container) -> Callable[..., Any]:
 
     runner = asyncio.run_coroutine_threadsafe(_lifespan_runner(), loop_thread.loop)
     ready.result(timeout=30)
-    middleware = ASGIMiddleware(asgi_app, loop=loop_thread.loop, wait_time=30.0)
+    middleware = ASGIMiddleware(
+        asgi_app,  # type: ignore[arg-type]  # Starlette is a valid ASGI app; stubs are narrower
+        loop=loop_thread.loop,
+        wait_time=30.0,
+    )
     middleware._dc_lifespan_task = runner  # type: ignore[attr-defined]  # keep a reference
     return StatelessMcpMethodGuard(middleware)
 
@@ -98,7 +102,10 @@ class StatelessMcpMethodGuard:
         path = str(environ.get("PATH_INFO", ""))
         method = str(environ.get("REQUEST_METHOD", "")).upper()
         if path in ("/mcp", "/mcp/") and method in ("GET", "DELETE"):
-            body = b'{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Method not allowed: stateless server, POST only"}}'
+            body = (
+                b'{"jsonrpc":"2.0","id":null,"error":{"code":-32000,'
+                b'"message":"Method not allowed: stateless server, POST only"}}'
+            )
             start_response(
                 "405 Method Not Allowed",
                 [

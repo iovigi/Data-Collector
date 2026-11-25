@@ -73,8 +73,9 @@ def disable_rq_stream_results() -> None:
 
 def build_worker(redis_client: Any, *, windows: bool | None = None) -> Worker:
     is_windows = (os.name == "nt") if windows is None else windows
-    cls: type[Worker] = WindowsSimpleWorker if is_windows else Worker
-    return cls([QUEUE_NAME], connection=redis_client)
+    cls: Any = WindowsSimpleWorker if is_windows else Worker
+    worker: Worker = cls([QUEUE_NAME], connection=redis_client)
+    return worker
 
 
 POLL_INTERVAL_SECONDS = 1.0
@@ -96,7 +97,8 @@ def run_polling(redis_client: Any, stop: threading.Event, *, windows: bool | Non
     while not stop.is_set():
         worker = build_worker(redis_client, windows=windows)
         if time.time() - last_maintenance < REGISTRY_MAINTENANCE_SECONDS:
-            worker.last_cleaned_at = now()  # registry cleanup only every 10 minutes
+            # Registry cleanup only every 10 minutes.
+            worker.last_cleaned_at = now()  # type: ignore[assignment]
         else:
             last_maintenance = time.time()
         worker.work(burst=True, with_scheduler=False, logging_level="WARNING")

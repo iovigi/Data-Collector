@@ -24,7 +24,9 @@ def create_csrf_token(secret: str, sid: str) -> str:
     return f"{nonce}.{mac}"
 
 
-def verify_csrf_token(secret: str, sid: str, cookie_val: str | None, header_val: str | None) -> bool:
+def verify_csrf_token(
+    secret: str, sid: str, cookie_val: str | None, header_val: str | None
+) -> bool:
     if not sid or not cookie_val or not header_val:
         return False
     if not hmac.compare_digest(cookie_val.encode("utf-8"), header_val.encode("utf-8")):

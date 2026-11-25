@@ -75,7 +75,9 @@ def _set_session_cookies(resp: Response, sid: str) -> None:
     sid_name, csrf_name = cookie_names()
     ttl = get_container().settings.web_session_ttl_seconds
     secure = _secure_cookies()
-    resp.set_cookie(sid_name, sid, max_age=ttl, path="/", secure=secure, httponly=True, samesite="Lax")
+    resp.set_cookie(
+        sid_name, sid, max_age=ttl, path="/", secure=secure, httponly=True, samesite="Lax"
+    )
     resp.set_cookie(
         csrf_name,
         create_csrf_token(_secret(), sid),
@@ -216,7 +218,7 @@ def _dispatch_v1(app: Flask, subpath: str, access_token: str, body: bytes | None
         path=f"/api/v1/{subpath}",
         method=request.method,
         query_string=request.query_string.decode("latin-1"),
-        headers=headers,
+        headers=list(headers.items()),
         data=body,
         environ_overrides={
             "REMOTE_ADDR": request.remote_addr or "unknown",

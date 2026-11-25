@@ -19,9 +19,10 @@ from data_collector.app import create_app
 from data_collector.config import Settings
 from data_collector.domain.identities import Actor, PrincipalType
 from data_collector.hosting.mcp_bridge import PathDispatcher, build_mcp_wsgi, is_mcp_path
-from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from werkzeug.serving import make_server
+
+from mcp import ClientSession
 
 SCOPES = ["workspace:read", "collection:read", "records:read"]
 
@@ -172,7 +173,9 @@ def test_transport_semantics(wsgi_mcp):
 
     # Malformed bodies are client errors, never 500
     bad = {"Content-Type": "application/json"}
-    assert httpx.post(f"{base}/oauth/register", content=b"{not json", headers=bad).status_code == 400
+    assert (
+        httpx.post(f"{base}/oauth/register", content=b"{not json", headers=bad).status_code == 400
+    )
     assert httpx.post(f"{base}/oauth/register", content=b"[1,2]", headers=bad).status_code == 400
     assert httpx.post(f"{base}/oauth/token", content=b"{nope", headers=bad).status_code == 400
 

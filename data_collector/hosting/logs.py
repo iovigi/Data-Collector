@@ -11,6 +11,7 @@ import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
 
 from data_collector.infrastructure.logging import JsonFormatter
 
@@ -22,13 +23,13 @@ class DailyPerProcessFileHandler(logging.Handler):
         self._dir.mkdir(parents=True, exist_ok=True)
         self._prefix = prefix
         self._day = ""
-        self._stream: object | None = None
+        self._stream: TextIO | None = None
 
     def _ensure_stream(self) -> None:
         day = datetime.now(UTC).strftime("%Y%m%d")
         if day != self._day or self._stream is None:
             if self._stream is not None:
-                self._stream.close()  # type: ignore[attr-defined]
+                self._stream.close()
             path = self._dir / f"{self._prefix}-{day}-{os.getpid()}.log"
             self._stream = path.open("a", encoding="utf-8")
             self._day = day
@@ -39,8 +40,11 @@ class DailyPerProcessFileHandler(logging.Handler):
             self.acquire()
             try:
                 self._ensure_stream()
-                self._stream.write(msg + "\n")  # type: ignore[attr-defined]
-                self._stream.flush()  # type: ignore[attr-defined]
+                stream = self._stream
+                if stream is None:  # pragma: no cover - _ensure_stream always opens one
+                    return
+                stream.write(msg + "\n")
+                stream.flush()
             finally:
                 self.release()
         except Exception:
