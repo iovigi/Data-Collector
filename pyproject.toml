@@ -45,6 +45,8 @@ dev = [
     "mypy>=1.13.0",
     "bandit>=1.7.10",
     "pip-audit>=2.7.3",
+    # hosting/mcp_bridge.py (in-process MCP) and its tests import it on every platform.
+    "a2wsgi>=1.10.0,<2.0",
 ]
 # Windows IIS FastCGI hosting (docs/operations/IIS_DEPLOYMENT_REPORT.md)
 iis = [
