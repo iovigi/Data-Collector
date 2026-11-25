@@ -1,9 +1,13 @@
-# ChatGPT & OpenAI API MCP Setup
+# ChatGPT
 
-1. Deploy `dc-mcp-http` behind HTTPS using Caddy (`compose.yaml` `--profile tls`) at `https://YOUR_DOMAIN/mcp`.
-2. Set `MCP_PUBLIC_URL=https://YOUR_DOMAIN/mcp`, `ALLOWED_ORIGINS=https://chatgpt.com`, and `OAUTH_MODE=external` (recommended) or `OAUTH_MODE=builtin`.
-3. Verify discovery before connecting:
-   - `curl -i https://YOUR_DOMAIN/.well-known/oauth-protected-resource`
-   - `curl -i https://YOUR_DOMAIN/.well-known/oauth-authorization-server`
-4. In ChatGPT Settings -> Connectors -> Custom Connector, enter `https://YOUR_DOMAIN/mcp` and complete OAuth 2.1 PKCE authorization.
-5. **Note:** ChatGPT custom connector availability depends on your OpenAI plan/workspace policy. Republish connector tool snapshots if tool schemas change.
+See [setup.md](setup.md) for the full guide; the admin MCP page shows the exact values.
+
+1. Settings → Apps & Connectors → Advanced settings → turn on **Developer mode**.
+2. Apps & Connectors → **Create**: name `Data Collector`, MCP server URL `<MCP_PUBLIC_URL>`,
+   Authentication **OAuth**. Accept the custom-connector notice, Create, then Connect.
+3. Sign in, choose the workspace, Approve.
+4. In a chat, choose Developer mode from the **+** menu and enable Data Collector.
+
+ChatGPT registers itself (dynamic client registration) with
+`https://chatgpt.com/connector_platform_oauth_redirect`; nothing needs to be preconfigured
+on the server.

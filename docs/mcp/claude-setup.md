@@ -1,24 +1,13 @@
-# Claude Desktop, Claude Code & Claude Remote Setup
+# Claude (claude.ai, Claude Desktop, Claude Code)
 
-## Local Stdio (Claude Code / Claude Desktop)
-```json
-{
-  "mcpServers": {
-    "data-collector": {
-      "command": "dc-mcp-stdio",
-      "env": {
-        "MONGODB_URI": "mongodb://localhost:27017/",
-        "MONGODB_DB": "data_collector",
-        "REDIS_URL": "redis://localhost:6379/0",
-        "DATA_COLLECTOR_API_KEY": "dc_xxxx.yyyy"
-      }
-    }
-  }
-}
-```
-MCP runs in read-only mode by default (`MCP_ALLOW_WRITES=false`).
+See [setup.md](setup.md) for the full guide; the admin MCP page shows the exact values.
 
-## Remote Custom Connector (Claude.ai)
-1. Expose `dc-mcp-http` over HTTPS at `https://YOUR_DOMAIN/mcp` with `ALLOWED_ORIGINS=https://claude.ai`.
-2. Add `https://YOUR_DOMAIN/mcp` in Claude Custom Connectors and complete OAuth 2.1 PKCE consent.
-3. For destructive deletes when `MCP_ALLOW_WRITES=true`, the server requires `dc_prepare_delete_record` -> `dc_delete_record` with a one-time signed token.
+- **claude.ai / Claude Desktop:** Settings → Connectors → *Add custom connector* → name
+  `Data Collector`, URL `<MCP_PUBLIC_URL>` → Add → Connect → sign in, choose the workspace,
+  Approve. Enable the connector in a chat from the tools menu.
+- **Claude Code (OAuth):** `claude mcp add --transport http data-collector <MCP_PUBLIC_URL>`,
+  then `/mcp` in Claude Code → Authenticate.
+- **Claude Code (token, no browser):** create an MCP token on the admin MCP page, then
+  `claude mcp add --transport http data-collector <MCP_PUBLIC_URL> --header "Authorization: Bearer dcp_…"`.
+- **Claude Desktop config file:** it only runs stdio servers; use the `mcp-remote` bridge
+  config shown on the MCP page.

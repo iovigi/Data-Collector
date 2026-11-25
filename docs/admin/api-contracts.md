@@ -45,3 +45,18 @@ All existing `/api/v1/*` endpoints are preserved. The following extensions were 
 - Audit: `collection.delete_prepare` and `collection.delete` events with actor, slug, record count and `correlation_id`
   (shared by prepare and delete). Refusals are audited with `decision="deny"` and a `reason`; failures mid-delete with `decision="error"`.
 - Capabilities: `features.can_delete_collections` is true only for owner/admin sessions that are not collection-scoped keys or MCP.
+
+## Analytics (same engine as the MCP aggregation tools)
+- `POST /api/v1/collections/{cid}/analytics/aggregate` — `{group_by[≤3], metrics[≤10] {op, field?, as?}, filter, having[], sort[], limit≤500}` → `{rows, truncated, coverage {matched, unknown{field:n}, freshness}}`.
+  Ops: `count` (field optional: present-count), `fill_rate`, `count_distinct`, `sum`, `avg`, `min`, `max`, `p50` (MongoDB 7+).
+- `POST .../analytics/distinct` — `{field, filter, limit≤200}` → top values with counts + coverage.
+- `POST .../analytics/histogram` — `{date_field=created_at, interval day|week|month, filter}` → buckets (UTC; ISO weeks).
+- `GET .../analytics/fields` — sampled field paths with types, fill rate, `groupable`.
+- `records:read`; read rate limit; `422 QUERY_TOO_BROAD` when the time/memory budget is exceeded.
+
+## MCP connections (admin)
+- `GET /api/v1/workspaces/{wid}/mcp/connection-info` — MCP URL, OAuth metadata URLs, workspace, tools, writes flag.
+- `POST /api/v1/workspaces/{wid}/mcp/connection-check` — outside-in probe of the public URLs (write-rate-limited).
+- `GET|POST /api/v1/workspaces/{wid}/mcp/tokens`, `POST .../mcp/tokens/{id}/revoke` — personal MCP access tokens (`dcp_…`, shown once; signed-in users only; own tokens, or all for workspace managers).
+- `GET /api/v1/workspaces/{wid}/mcp/grants`, `POST .../mcp/grants/{id}/revoke` — OAuth-connected clients bound to the workspace.
+- `features.can_manage_all_mcp_connections` in capabilities.
