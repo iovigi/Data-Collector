@@ -93,5 +93,3 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build API container image
         run: docker build -t data-collector:ci .
-      - name: Build Web container image
-        run: docker build -t data-collector-web:ci ./web
