@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Link } from "@/lib/router";
-import { useParams } from "@/lib/router";
+import { Link, useParams, useRouter } from "@/lib/router";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   flexRender,
@@ -22,6 +21,7 @@ import type {
   WorkspaceCapabilities,
 } from "@/lib/api/types";
 import { AppShell } from "@/components/layout/AppShell";
+import { DeleteCollectionDialog } from "@/components/collections/DeleteCollectionDialog";
 import { useToast } from "@/components/providers";
 import {
   Badge,
@@ -155,6 +155,8 @@ export default function DataExplorerPage() {
 
   // Import/Export/SaveQuery modals
   const [openImport, setOpenImport] = useState(false);
+  const [openDeleteCollection, setOpenDeleteCollection] = useState(false);
+  const router = useRouter();
   const [importFmt, setImportFmt] = useState<"csv" | "json" | "jsonl">("csv");
   const [importDryRun, setImportDryRun] = useState(true);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -466,6 +468,12 @@ export default function DataExplorerPage() {
               <Button size="sm" variant="secondary" onClick={() => setOpenImport(true)}>
                 <Upload className="h-3.5 w-3.5" />
                 Import
+              </Button>
+            )}
+            {caps?.can_delete_collections && (
+              <Button size="sm" variant="danger" onClick={() => setOpenDeleteCollection(true)}>
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete collection
               </Button>
             )}
             {caps?.can_write_records && (
@@ -925,6 +933,22 @@ export default function DataExplorerPage() {
           </div>
         </form>
       </Modal>
+      <DeleteCollectionDialog
+        open={openDeleteCollection}
+        onClose={() => setOpenDeleteCollection(false)}
+        collectionId={cid}
+        onDeleted={(res) => {
+          setOpenDeleteCollection(false);
+          queryClient.removeQueries({ queryKey: ["collection", wid, cid] });
+          queryClient.invalidateQueries({ queryKey: ["collections"] });
+          toast({
+            title: `Deleted ${res.slug}`,
+            description: `${res.records_deleted.toLocaleString()} records removed`,
+            variant: "success",
+          });
+          router.push(`/w/${wid}/collections`);
+        }}
+      />
     </AppShell>
   );
 }

@@ -416,3 +416,12 @@ def test_mcp_actor_is_refused_even_with_writes_enabled(ctx):
     with pytest.raises(AuthorizationError):
         ctx["ctr"].collection_deletion.prepare(mcp_actor, cid)
     assert ctx["ctr"].mongo.db.records.count_documents({"collection_id": cid}) == 1
+
+
+def test_bff_allowlist_permits_prepare_delete():
+    from data_collector.bff.allowlist import is_allowed_backend_path
+
+    cid = "6b063b57e8c6ea6c1abb2c7d"
+    assert is_allowed_backend_path(f"collections/{cid}/prepare-delete")
+    assert is_allowed_backend_path(f"collections/{cid}")
+    assert not is_allowed_backend_path("collections/not-an-id/prepare-delete")

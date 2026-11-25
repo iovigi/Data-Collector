@@ -25,6 +25,7 @@ export interface WorkspaceCapabilities {
     can_manage_members: boolean;
     can_create_keys: boolean;
     can_manage_collections: boolean;
+    can_delete_collections: boolean;
     can_write_records: boolean;
     can_delete_records: boolean;
     can_create_jobs: boolean;
@@ -195,4 +196,31 @@ export interface DashboardSummary {
   };
   recent_projects: Project[];
   recent_jobs: JobItem[];
+}
+
+export interface PrepareDeleteCollectionResponse {
+  collection_id: string;
+  workspace_id: string;
+  project_id: string;
+  slug: string;
+  status: string;
+  records: { active: number; trashed: number; total: number };
+  saved_queries: { count: number; items: Array<{ id: string; name: string }> };
+  active_jobs: { count: number; items: Array<{ id: string; type: string; state: string }> };
+  api_keys_restricted_to_collection: number;
+  confirmation_token: string;
+  expires_in_seconds: number;
+  correlation_id: string;
+}
+
+export interface DeleteCollectionResponse {
+  collection_id: string;
+  slug: string;
+  deleted: boolean;
+  correlation_id: string;
+  records_deleted: number;
+  saved_queries_deleted: number;
+  jobs_cancelled: number;
+  api_keys_detached: number;
+  idempotency_keys_deleted: number;
 }

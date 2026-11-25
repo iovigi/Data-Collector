@@ -24,7 +24,7 @@ _PATTERNS = [
     rf"projects/{_ID}",
     rf"projects/{_ID}/(archive|restore|collections)",
     rf"collections/{_ID}",
-    rf"collections/{_ID}/(records|records/batch|records/search|records/trash|imports|exports"
+    rf"collections/{_ID}/(prepare-delete|records|records/batch|records/search|records/trash|imports|exports"
     r"|saved-queries|schema-migrations/preview|schema-migrations/apply)",
     rf"collections/{_ID}/records/{_ID}",
     rf"collections/{_ID}/records/{_ID}/restore",
