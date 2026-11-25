@@ -28,6 +28,7 @@ from data_collector.services.query_dsl import (
     compile_projection,
     decode_cursor,
     encode_cursor,
+    parse_iso_datetime,
     query_signature,
     validate_field_name,
 )
@@ -395,7 +396,11 @@ class RecordService:
             last = page_rows[-1]
             if sort_field_public == "id":
                 sort_val: Any = last["id"]
-            elif sort_field_public in {"created_at", "updated_at", "version"}:
+            elif sort_field_public in {"created_at", "updated_at"}:
+                # serialize_doc turned the BSON Date into an ISO string; restore the
+                # datetime so the keyset cursor compares Date-to-Date in MongoDB.
+                sort_val = parse_iso_datetime(last.get(sort_field_public))
+            elif sort_field_public == "version":
                 sort_val = last.get(sort_field_public)
             else:
                 sort_val = last.get("data", {}).get(sort_field_public)

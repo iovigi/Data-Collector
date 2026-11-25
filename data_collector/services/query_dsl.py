@@ -11,7 +11,7 @@ import hmac
 import json
 import re
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from bson import ObjectId
@@ -56,6 +56,43 @@ def validate_field_name(field: str, allowed_fields: set[str] | None = None) -> s
             details=[{"path": field, "reason": "not allowed"}],
         )
     return field
+
+
+DATETIME_METADATA_FIELDS = frozenset({"created_at", "updated_at"})
+
+
+def parse_iso_datetime(value: Any) -> Any:
+    """Parse an ISO-8601 string (``Z`` suffix allowed) to an aware UTC datetime.
+
+    Non-string or unparseable values are returned unchanged.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _coerce_scalar(field: str, val: Any) -> Any:
+    """Convert filter values for metadata fields to their stored BSON types."""
+    if field == "id" and isinstance(val, str):
+        try:
+            return ObjectId(val)
+        except Exception as exc:
+            raise ValidationError("Invalid id value") from exc
+    if field in DATETIME_METADATA_FIELDS and isinstance(val, str):
+        parsed = parse_iso_datetime(val)
+        if not isinstance(parsed, datetime):
+            raise ValidationError(
+                f"'{field}' value must be an ISO-8601 date/time",
+                details=[{"path": field, "reason": "invalid datetime"}],
+            )
+        return parsed
+    return val
 
 
 def _to_mongo_field(field: str) -> str:
@@ -125,12 +162,12 @@ def compile_filter(
         if isinstance(val, dict) and any(str(k).startswith("$") for k in val):
             raise ValidationError("MongoDB operator objects are not allowed in predicate values")
 
+        if op in {"eq", "ne", "gt", "gte", "lt", "lte"}:
+            val = _coerce_scalar(field, val)
+        elif op == "in" and isinstance(val, list):
+            val = [_coerce_scalar(field, v) for v in val]
+
         if op == "eq":
-            if field == "id" and isinstance(val, str):
-                try:
-                    val = ObjectId(val)
-                except Exception as exc:
-                    raise ValidationError("Invalid id value") from exc
             return {mongo_field: val}
         if op == "ne":
             return {mongo_field: {"$ne": val}}

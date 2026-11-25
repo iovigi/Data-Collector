@@ -102,6 +102,29 @@ def test_collection_update_batch_create_and_cursor_pagination(svc_ctx):
     assert len(page2["items"]) == 1
     assert page2["has_more"] is False
 
+    # Default sort (created_at desc) as used by the admin Data Explorer:
+    # the cursor must round-trip the datetime so page 2 is not empty.
+    seen: list[str] = []
+    cursor = None
+    for _ in range(5):
+        page = svc_ctx.record_service.search_records(
+            owner, col["id"], sort=[{"field": "created_at", "direction": "desc"}],
+            limit=2, cursor=cursor,
+        )
+        seen.extend(r["id"] for r in page["items"])
+        cursor = page["next_cursor"]
+        if not page["has_more"]:
+            break
+    assert len(seen) == 3
+    assert len(set(seen)) == 3
+
+    # created_at filters accept ISO strings
+    all_after = svc_ctx.record_service.search_records(
+        owner, col["id"],
+        filter_ast={"field": "created_at", "op": "gte", "value": "2000-01-01T00:00:00Z"},
+    )
+    assert len(all_after["items"]) == 3
+
 
 def test_cli_help():
     runner = CliRunner()
