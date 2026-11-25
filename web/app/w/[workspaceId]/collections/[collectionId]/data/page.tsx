@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   flexRender,
   getCoreRowModel,
@@ -46,22 +46,87 @@ interface FilterRow {
   value: string;
 }
 
-function buildAst(logic: "and" | "or", rows: FilterRow[]): SafeFilterNode | null {
-  const valid = rows.filter((r) => r.field.trim() !== "");
+const PAGE_SIZE = 25;
+const DATE_FIELDS = new Set(["created_at", "updated_at"]);
+const FILTER_OPS: FilterOp[] = ["eq", "ne", "gt", "gte", "lt", "lte", "in", "exists", "contains"];
+
+type FieldType = "string" | "number" | "boolean" | "datetime" | "unknown";
+
+/** Resolve a JSON-Schema property type (handles `["string","null"]` unions). */
+function schemaFieldType(prop: unknown): FieldType {
+  if (!prop || typeof prop !== "object") return "unknown";
+  const p = prop as { type?: string | string[]; format?: string };
+  const types = Array.isArray(p.type) ? p.type.filter((t) => t !== "null") : [p.type];
+  const t = types[0];
+  if (t === "number" || t === "integer") return "number";
+  if (t === "boolean") return "boolean";
+  if (t === "string") return p.format === "date-time" ? "datetime" : "string";
+  return "unknown";
+}
+
+/** Convert a raw text input into the JSON value the backend compares against. */
+function coerceValue(raw: string, type: FieldType): unknown {
+  const v = raw.trim();
+  switch (type) {
+    case "number": {
+      const n = Number(v);
+      return v !== "" && !Number.isNaN(n) ? n : v;
+    }
+    case "boolean":
+      return v.toLowerCase() === "true" ? true : v.toLowerCase() === "false" ? false : v;
+    case "datetime": {
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? v : d.toISOString();
+    }
+    case "string":
+      return raw;
+    default: {
+      // No schema type info: best-effort guess.
+      if (v === "true") return true;
+      if (v === "false") return false;
+      const n = Number(v);
+      return v !== "" && !Number.isNaN(n) ? n : raw;
+    }
+  }
+}
+
+function buildAst(
+  logic: "and" | "or",
+  rows: FilterRow[],
+  typeOf: (field: string) => FieldType
+): SafeFilterNode | null {
+  const valid = rows.filter(
+    (r) => r.field.trim() !== "" && (r.op === "exists" || r.value.trim() !== "")
+  );
   if (valid.length === 0) return null;
   const nodes: SafeFilterNode[] = valid.map((r) => {
-    let parsedVal: unknown = r.value;
+    const type = typeOf(r.field);
+    let value: unknown;
     if (r.op === "exists") {
-      parsedVal = r.value !== "false";
+      value = r.value !== "false";
+    } else if (r.op === "contains") {
+      value = r.value;
     } else if (r.op === "in") {
-      parsedVal = r.value.split(",").map((s) => s.trim());
-    } else if (r.value !== "" && !Number.isNaN(Number(r.value)) && r.op !== "contains") {
-      parsedVal = Number(r.value);
+      value = r.value
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s !== "")
+        .map((s) => coerceValue(s, type));
+    } else {
+      value = coerceValue(r.value, type);
     }
-    return { field: r.field, op: r.op, value: parsedVal };
+    return { field: r.field, op: r.op, value };
   });
   if (nodes.length === 1) return nodes[0]!;
   return logic === "and" ? { and: nodes } : { or: nodes };
+}
+
+/** `datetime-local` input value <-> ISO string helpers. */
+function toLocalInput(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const off = d.getTimezoneOffset() * 60_000;
+  return new Date(d.getTime() - off).toISOString().slice(0, 16);
 }
 
 export default function DataExplorerPage() {
@@ -78,6 +143,8 @@ export default function DataExplorerPage() {
   const [appliedFilter, setAppliedFilter] = useState<SafeFilterNode | null>(null);
   const [cursorStack, setCursorStack] = useState<Array<string | null>>([null]);
   const currentCursor = cursorStack[cursorStack.length - 1] ?? null;
+  const [trashCursorStack, setTrashCursorStack] = useState<Array<string | null>>([null]);
+  const trashCursor = trashCursorStack[trashCursorStack.length - 1] ?? null;
   const [tab, setTab] = useState<"active" | "trash">("active");
 
   // Record Create/Edit/Conflict/Delete modals
@@ -115,17 +182,23 @@ export default function DataExplorerPage() {
         body: {
           filter: appliedFilter,
           sort: [{ field: "created_at", direction: "desc" }],
-          limit: 25,
+          limit: PAGE_SIZE,
           cursor: currentCursor,
         },
       }),
     enabled: tab === "active",
+    placeholderData: keepPreviousData,
   });
 
   const trashQuery = useQuery({
-    queryKey: ["records-trash", wid, cid],
-    queryFn: () => apiFetch<SearchRecordsResponse>(`/collections/${cid}/records/trash?limit=25`),
+    queryKey: ["records-trash", wid, cid, trashCursor],
+    queryFn: () => {
+      const qs = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      if (trashCursor) qs.set("cursor", trashCursor);
+      return apiFetch<SearchRecordsResponse>(`/collections/${cid}/records/trash?${qs}`);
+    },
     enabled: tab === "trash",
+    placeholderData: keepPreviousData,
   });
 
   const createMutation = useMutation({
@@ -262,14 +335,34 @@ export default function DataExplorerPage() {
       toast({ title: "Save query failed", description: err.message, variant: "error" }),
   });
 
-  const schemaProps = useMemo(() => {
-    const props = (colQuery.data?.schema_json as { properties?: Record<string, unknown> })?.properties;
-    return props ? Object.keys(props) : [];
-  }, [colQuery.data]);
+  const schemaPropDefs = useMemo(
+    () =>
+      (colQuery.data?.schema_json as { properties?: Record<string, unknown> } | undefined)
+        ?.properties ?? {},
+    [colQuery.data]
+  );
+  const schemaProps = useMemo(() => Object.keys(schemaPropDefs), [schemaPropDefs]);
 
-  const searchableFields = colQuery.data?.searchable_fields.length
-    ? colQuery.data.searchable_fields
-    : schemaProps;
+  // Same allowlist the backend enforces: schema properties ∪ searchable_fields,
+  // plus the built-in timestamp metadata fields.
+  const searchableFields = useMemo(() => {
+    const fields = new Set<string>([
+      ...(colQuery.data?.searchable_fields ?? []),
+      ...schemaProps,
+    ]);
+    return [...fields, ...[...DATE_FIELDS].filter((f) => !fields.has(f))];
+  }, [colQuery.data, schemaProps]);
+
+  const fieldType = (field: string): FieldType =>
+    DATE_FIELDS.has(field) ? "datetime" : schemaFieldType(schemaPropDefs[field]);
+
+  const applyFilters = () => {
+    setAppliedFilter(buildAst(logic, filterRows, fieldType));
+    setCursorStack([null]);
+  };
+
+  const updateRow = (idx: number, patch: Partial<FilterRow>) =>
+    setFilterRows((prev) => prev.map((item, i) => (i === idx ? { ...item, ...patch } : item)));
 
   const caps = capsQuery.data?.features;
 
@@ -342,7 +435,10 @@ export default function DataExplorerPage() {
     ];
   }, [schemaProps, caps, tab, restoreMutation]);
 
-  const activeRows = tab === "active" ? (searchQuery.data?.items ?? []) : (trashQuery.data?.items ?? []);
+  const currentQuery = tab === "active" ? searchQuery : trashQuery;
+  const activeRows = currentQuery.data?.items ?? [];
+  const pageStack = tab === "active" ? cursorStack : trashCursorStack;
+  const setPageStack = tab === "active" ? setCursorStack : setTrashCursorStack;
 
   const table = useReactTable({
     data: activeRows,
@@ -448,81 +544,118 @@ export default function DataExplorerPage() {
               >
                 Reset
               </Button>
-              <Button
-                size="sm"
-                onClick={() => {
-                  setAppliedFilter(buildAst(logic, filterRows));
-                  setCursorStack([null]);
-                }}
-              >
+              <Button size="sm" onClick={applyFilters}>
                 Apply Filters
               </Button>
             </div>
           </div>
 
-          {filterRows.map((row, idx) => (
-            <div key={idx} className="flex flex-wrap items-center gap-2">
-              <Select
-                aria-label={`Filter field ${idx + 1}`}
-                value={row.field}
-                onChange={(e) =>
-                  setFilterRows((prev) =>
-                    prev.map((item, i) => (i === idx ? { ...item, field: e.target.value } : item))
-                  )
-                }
-              >
-                {searchableFields.map((f) => (
-                  <option key={f} value={f}>
-                    {f}
-                  </option>
-                ))}
-              </Select>
-              <Select
-                aria-label={`Filter operator ${idx + 1}`}
-                value={row.op}
-                onChange={(e) =>
-                  setFilterRows((prev) =>
-                    prev.map((item, i) =>
-                      i === idx ? { ...item, op: e.target.value as FilterOp } : item
-                    )
-                  )
-                }
-              >
-                {["eq", "ne", "gt", "gte", "lt", "lte", "in", "exists", "contains"].map((op) => (
-                  <option key={op} value={op}>
-                    {op}
-                  </option>
-                ))}
-              </Select>
-              <Input
-                aria-label={`Filter value ${idx + 1}`}
-                className="max-w-xs"
-                value={row.value}
-                onChange={(e) =>
-                  setFilterRows((prev) =>
-                    prev.map((item, i) => (i === idx ? { ...item, value: e.target.value } : item))
-                  )
-                }
-                placeholder="Value..."
-              />
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setFilterRows((prev) => prev.filter((_, i) => i !== idx))}
-              >
-                Remove
-              </Button>
-            </div>
-          ))}
+          <form
+            className="space-y-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              applyFilters();
+            }}
+          >
+            {filterRows.map((row, idx) => {
+              const type = fieldType(row.field);
+              return (
+                <div key={idx} className="flex flex-wrap items-center gap-2">
+                  <Select
+                    aria-label={`Filter field ${idx + 1}`}
+                    value={row.field}
+                    onChange={(e) => updateRow(idx, { field: e.target.value, value: "" })}
+                  >
+                    {!searchableFields.includes(row.field) && (
+                      <option value="" disabled>
+                        Select field…
+                      </option>
+                    )}
+                    {searchableFields.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
+                  </Select>
+                  <Select
+                    aria-label={`Filter operator ${idx + 1}`}
+                    value={row.op}
+                    onChange={(e) => {
+                      const op = e.target.value as FilterOp;
+                      updateRow(idx, op === "exists" ? { op, value: "true" } : { op });
+                    }}
+                  >
+                    {FILTER_OPS.map((op) => (
+                      <option key={op} value={op}>
+                        {op}
+                      </option>
+                    ))}
+                  </Select>
+                  {row.op === "exists" ? (
+                    <Select
+                      aria-label={`Filter value ${idx + 1}`}
+                      value={row.value === "false" ? "false" : "true"}
+                      onChange={(e) => updateRow(idx, { value: e.target.value })}
+                    >
+                      <option value="true">exists</option>
+                      <option value="false">missing</option>
+                    </Select>
+                  ) : type === "boolean" && row.op !== "in" ? (
+                    <Select
+                      aria-label={`Filter value ${idx + 1}`}
+                      value={row.value}
+                      onChange={(e) => updateRow(idx, { value: e.target.value })}
+                    >
+                      <option value="">Select…</option>
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </Select>
+                  ) : type === "datetime" && row.op !== "in" && row.op !== "contains" ? (
+                    <Input
+                      aria-label={`Filter value ${idx + 1}`}
+                      type="datetime-local"
+                      className="max-w-xs"
+                      value={row.value ? toLocalInput(row.value) : ""}
+                      onChange={(e) =>
+                        updateRow(idx, {
+                          value: e.target.value ? new Date(e.target.value).toISOString() : "",
+                        })
+                      }
+                    />
+                  ) : (
+                    <Input
+                      aria-label={`Filter value ${idx + 1}`}
+                      className="max-w-xs"
+                      type={type === "number" && row.op !== "in" ? "number" : "text"}
+                      value={row.value}
+                      onChange={(e) => updateRow(idx, { value: e.target.value })}
+                      placeholder={row.op === "in" ? "value1, value2, …" : "Value..."}
+                    />
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setFilterRows((prev) => prev.filter((_, i) => i !== idx))}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              );
+            })}
+            {/* Enables Enter-to-apply from any input */}
+            <button type="submit" hidden aria-hidden tabIndex={-1} />
+          </form>
         </Card>
       )}
 
       {/* Records Table */}
-      {(searchQuery.isLoading || trashQuery.isLoading) && <SkeletonTable rows={6} />}
-      {searchQuery.isError && <ErrorState error={searchQuery.error} onRetry={() => searchQuery.refetch()} />}
-      {trashQuery.isError && <ErrorState error={trashQuery.error} onRetry={() => trashQuery.refetch()} />}
+      {currentQuery.isLoading && <SkeletonTable rows={6} />}
+      {currentQuery.isError && (
+        <ErrorState error={currentQuery.error} onRetry={() => currentQuery.refetch()} />
+      )}
 
-      {!searchQuery.isLoading && !trashQuery.isLoading && activeRows.length === 0 && (
+      {currentQuery.isSuccess && activeRows.length === 0 && (
         <EmptyState
           title={tab === "active" ? "No records match" : "Trash is empty"}
           description={
@@ -563,27 +696,35 @@ export default function DataExplorerPage() {
       )}
 
       {/* Cursor Pagination Controls */}
-      {tab === "active" && searchQuery.data && (
+      {currentQuery.data && (pageStack.length > 1 || currentQuery.data.has_more) && (
         <div className="mt-4 flex items-center justify-between">
           <div className="text-xs text-[hsl(var(--muted-foreground))]">
-            Page {cursorStack.length} · Showing {searchQuery.data.items.length} records
+            Page {pageStack.length} · Records {(pageStack.length - 1) * PAGE_SIZE + (activeRows.length ? 1 : 0)}
+            –{(pageStack.length - 1) * PAGE_SIZE + activeRows.length}
+            {currentQuery.isFetching && " · Loading…"}
           </div>
           <div className="flex items-center gap-2">
             <Button
               size="sm"
               variant="secondary"
-              disabled={cursorStack.length <= 1}
-              onClick={() => setCursorStack((s) => s.slice(0, -1))}
+              disabled={pageStack.length <= 1 || currentQuery.isFetching}
+              onClick={() => setPageStack((s) => s.slice(0, -1))}
             >
               Previous
             </Button>
             <Button
               size="sm"
               variant="secondary"
-              disabled={!searchQuery.data.has_more || !searchQuery.data.next_cursor}
-              onClick={() =>
-                setCursorStack((s) => [...s, searchQuery.data!.next_cursor])
+              disabled={
+                currentQuery.isFetching ||
+                currentQuery.isPlaceholderData ||
+                !currentQuery.data.has_more ||
+                !currentQuery.data.next_cursor
               }
+              onClick={() => {
+                const next = currentQuery.data?.next_cursor;
+                if (next) setPageStack((s) => [...s, next]);
+              }}
             >
               Next
             </Button>
