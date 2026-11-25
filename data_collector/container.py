@@ -40,6 +40,7 @@ from data_collector.services.m11_service import (
     UsageAnalyticsService,
     WebhookService,
 )
+from data_collector.services.mcp_access_service import McpAccessService
 from data_collector.services.record_service import RecordService
 
 
@@ -74,6 +75,7 @@ class Container:
     usage_analytics: UsageAnalyticsService
     admin_ext: AdminExtensionService
     analytics: AnalyticsService
+    mcp_access: McpAccessService
     job_queue: JobQueue | None = None
 
     def close(self) -> None:
@@ -191,6 +193,14 @@ def build_container(
     )
 
     analytics = AnalyticsService(settings=cfg, db=db, collections=collection_service)
+    mcp_access = McpAccessService(
+        settings=cfg,
+        workspaces=workspaces,
+        api_keys=api_keys,
+        users=users,
+        oauth=oauth_service,
+        audit=audit_service,
+    )
 
     return Container(
         settings=cfg,
@@ -223,4 +233,5 @@ def build_container(
         admin_ext=admin_ext,
         job_queue=JobQueue(redis_mgr.client, jobs) if cfg.jobs_async else None,
         analytics=analytics,
+        mcp_access=mcp_access,
     )

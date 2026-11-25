@@ -93,6 +93,7 @@ class AdminExtensionService:
                 "can_export": Scope.EXPORT_READ in scopes,
                 "can_read_audit": Scope.AUDIT_READ in scopes,
                 "can_manage_webhooks": Scope.WORKSPACE_MANAGE in scopes,
+                "can_manage_all_mcp_connections": Scope.WORKSPACE_MANAGE in scopes,
             },
         }
 

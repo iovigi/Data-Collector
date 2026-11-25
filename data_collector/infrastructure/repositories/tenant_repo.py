@@ -256,8 +256,10 @@ class ApiKeyRepository:
         scopes: list[str],
         allowed_collection_ids: list[str] | None,
         expires_at: Any,
+        kind: str = "api_key",
     ) -> dict[str, Any]:
         doc: dict[str, Any] = {
+            "kind": kind,
             "workspace_id": workspace_id,
             "principal_id": principal_id,
             "name": name,
@@ -284,7 +286,11 @@ class ApiKeyRepository:
         self._col.update_one({"_id": key_id}, {"$set": {"last_used_at": utc_now()}})
 
     def list_for_workspace(self, workspace_id: str) -> list[dict[str, Any]]:
-        docs = list(self._col.find({"workspace_id": workspace_id}).sort("created_at", DESCENDING))
+        docs = list(
+            self._col.find({"workspace_id": workspace_id, "kind": {"$ne": "mcp_pat"}}).sort(
+                "created_at", DESCENDING
+            )
+        )
         out = []
         for d in docs:
             s = serialize_doc(d)
@@ -311,6 +317,25 @@ class ApiKeyRepository:
             {"$pull": {"allowed_collection_ids": collection_id}},
         )
         return int(res.modified_count)
+
+    def list_mcp_tokens(
+        self, workspace_id: str, principal_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {"workspace_id": workspace_id, "kind": "mcp_pat"}
+        if principal_id is not None:
+            query["principal_id"] = principal_id
+        out = []
+        for d in self._col.find(query).sort("created_at", DESCENDING).limit(200):
+            s = serialize_doc(d)
+            if s:
+                s.pop("key_hash", None)
+                out.append(s)
+        return out
+
+    def get_in_workspace(self, workspace_id: str, key_id: str) -> dict[str, Any] | None:
+        return self._col.find_one(
+            {"_id": to_object_id(key_id, "key_id"), "workspace_id": workspace_id}
+        )
 
     def revoke(self, workspace_id: str, key_id: str) -> dict[str, Any] | None:
         doc = self._col.find_one_and_update(

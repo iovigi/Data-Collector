@@ -68,9 +68,14 @@ class CollectionService:
     def list_workspaces(
         self, actor: Actor, limit: int = 25, cursor: str | None = None
     ) -> list[dict[str, Any]]:
-        return self._workspaces.list_for_principal(
+        items = self._workspaces.list_for_principal(
             actor.principal_id, limit=min(limit, 100), cursor=cursor
         )
+        if actor.workspace_id is not None:
+            # Workspace-bound credentials (API keys, MCP tokens, workspace OAuth grants)
+            # only ever see their own workspace.
+            items = [w for w in items if w["id"] == actor.workspace_id]
+        return items
 
     def get_workspace(self, actor: Actor, workspace_id: str) -> dict[str, Any]:
         role = self._workspaces.get_membership_role(workspace_id, actor.principal_id)

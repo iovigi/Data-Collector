@@ -17,6 +17,8 @@ _PATTERNS = [
     rf"workspaces/{_ID}",
     rf"workspaces/{_ID}/(archive|restore|capabilities|dashboard/summary|members|invitations"
     r"|transfer-ownership|projects|jobs|audit|webhooks|usage)",
+    rf"workspaces/{_ID}/mcp/(connection-info|connection-check|tokens|grants)",
+    rf"workspaces/{_ID}/mcp/(tokens|grants)/{_ID}/revoke",
     rf"workspaces/{_ID}/members/{_ID}",
     rf"workspaces/{_ID}/webhooks/{_ID}",
     rf"workspaces/{_ID}/webhooks/{_ID}/(rotate-secret|deliveries)",

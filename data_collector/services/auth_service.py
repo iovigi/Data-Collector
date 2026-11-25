@@ -212,8 +212,16 @@ class AuthService:
             mcp_allow_writes=self._settings.mcp_allow_writes,
         )
 
-    def authenticate_api_key(self, raw_key: str, *, is_mcp: bool = False) -> Actor:
-        """Verify prefixed API key (`dc_<hex>.<secret>`) and return scoped Actor."""
+    def authenticate_api_key(
+        self, raw_key: str, *, is_mcp: bool = False, require_mcp_token: bool = False
+    ) -> Actor:
+        """Verify a prefixed key and return a scoped Actor.
+
+        Two kinds share the hashed-key store: workspace API keys (`dc_<hex>.<secret>`,
+        kind "api_key") and MCP personal access tokens (`dcp_<hex>.<secret>`, kind
+        "mcp_pat"). MCP tokens are refused everywhere except /mcp (`is_mcp=True`);
+        `require_mcp_token` refuses workspace API keys (used for Bearer on /mcp).
+        """
         if "." not in raw_key:
             raise AuthenticationError("Invalid API key format")
         prefix, _ = raw_key.split(".", 1)
@@ -222,6 +230,14 @@ class AuthService:
             raise AuthenticationError("Invalid API key")
         if doc.get("revoked_at") is not None:
             raise AuthenticationError("API key revoked")
+        kind = str(doc.get("kind") or "api_key")
+        if kind == "mcp_pat" and not is_mcp:
+            raise AuthenticationError("MCP access tokens are only accepted on /mcp")
+        if require_mcp_token and kind != "mcp_pat":
+            raise AuthenticationError(
+                "Workspace API keys are not MCP tokens. Create an MCP access token in the "
+                "admin (MCP page) or connect with OAuth."
+            )
         expires_at = doc.get("expires_at")
         if isinstance(expires_at, datetime):
             if expires_at.tzinfo is None:
@@ -244,6 +260,7 @@ class AuthService:
             allowed_collection_ids=allowed_cols,
             is_mcp=is_mcp,
             mcp_allow_writes=self._settings.mcp_allow_writes,
+            credential=kind,
         )
 
     def create_api_key(

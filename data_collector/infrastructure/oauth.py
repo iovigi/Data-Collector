@@ -22,8 +22,42 @@ from data_collector.domain.exceptions import AuthenticationError, BadRequestErro
 from data_collector.domain.identities import Actor, PrincipalType, Scope
 from data_collector.infrastructure.crypto import hash_token
 
-SUPPORTED_OAUTH_SCOPES: frozenset[str] = frozenset(s.value for s in Scope)
+# Scopes an OAuth (MCP) client can be granted. Admin-only scopes (keys, members, audit,
+# collection management/deletion) are never issued to OAuth clients.
+MCP_OAUTH_SCOPES: list[str] = [
+    "workspace:read",
+    "collection:read",
+    "records:read",
+    "records:write",
+    "records:delete",
+    "jobs:read",
+    "jobs:create",
+    "export:read",
+]
+SUPPORTED_OAUTH_SCOPES: frozenset[str] = frozenset(MCP_OAUTH_SCOPES)
 DEFAULT_CLIENT_SCOPES: list[str] = ["workspace:read", "collection:read", "records:read"]
+WRITE_OAUTH_SCOPES: frozenset[str] = frozenset({"records:write", "records:delete", "jobs:create"})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+GRANT_LAST_USED_THROTTLE = timedelta(seconds=60)
+
+
+def normalize_resource(value: str) -> str:
+    """Compare resource indicators without a trailing slash (".../mcp" == ".../mcp/")."""
+    return value.strip().rstrip("/")
+
+
+def redirect_uri_matches(registered: str, requested: str) -> bool:
+    """Exact match, except loopback http redirects may use any port (RFC 8252 section 7.3)."""
+    if registered == requested:
+        return True
+    a, b = urlparse(registered), urlparse(requested)
+    return (
+        a.scheme == b.scheme == "http"
+        and a.hostname in LOOPBACK_HOSTS
+        and a.hostname == b.hostname
+        and a.path == b.path
+        and a.query == b.query
+    )
 
 
 def _b64url_uint(val: int) -> str:
@@ -49,24 +83,20 @@ def validate_redirect_uri(uri: str, *, allow_localhost_dev: bool = True) -> str:
         raise ValidationError("redirect_uri must not contain userinfo")
     if parsed.scheme == "https" and parsed.netloc and parsed.hostname:
         return uri
-    if (
-        allow_localhost_dev
-        and parsed.scheme == "http"
-        and parsed.hostname in {"localhost", "127.0.0.1"}
-    ):
+    # Native clients (Claude Code, Claude Desktop, CLI tools) receive the code on a
+    # loopback listener; RFC 8252 requires allowing http for loopback in every env.
+    if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
         return uri
-    raise ValidationError("redirect_uri must use https (or http://localhost in dev/test)")
+    del allow_localhost_dev  # kept for call-site compatibility
+    raise ValidationError("redirect_uri must use https (or http on a loopback address)")
 
 
 def parse_and_validate_scopes(raw_scope: str) -> list[str]:
     """Parse space-delimited scope string and reject any unknown scope."""
-    scopes = [s.strip() for s in raw_scope.split() if s.strip()]
-    if not scopes:
-        return list(DEFAULT_CLIENT_SCOPES)
-    for s in scopes:
-        if s not in SUPPORTED_OAUTH_SCOPES:
-            raise BadRequestError(f"Unknown OAuth scope '{s}'")
-    return list(dict.fromkeys(scopes))
+    # Unknown scopes (e.g. "openid", "offline_access", "profile" sent by generic clients)
+    # are ignored rather than failing the whole request (RFC 6749 section 3.3).
+    scopes = [s for s in dict.fromkeys(raw_scope.split()) if s in SUPPORTED_OAUTH_SCOPES]
+    return scopes or list(DEFAULT_CLIENT_SCOPES)
 
 
 class OAuthService:
@@ -79,6 +109,7 @@ class OAuthService:
         self._codes = db.oauth_codes
         self._refresh_tokens = db.oauth_refresh_tokens
         self._revoked = db.oauth_revoked_jtis
+        self._grants = db.oauth_grants
         self._jwk_client: PyJWKClient | None = None
 
         self._private_key: rsa.RSAPrivateKey | None = None
@@ -136,16 +167,21 @@ class OAuthService:
         *,
         client_name: str,
         redirect_uris: list[str],
-        scope: str = "workspace:read collection:read records:read",
+        scope: str | None = None,
     ) -> dict[str, Any]:
-        """RFC 7591 Dynamic Client Registration (public PKCE clients)."""
+        """RFC 7591 Dynamic Client Registration (public PKCE clients).
+
+        Without an explicit `scope` the client may later request any MCP scope; what it
+        actually gets is decided on the consent screen, by the user's role and by
+        MCP_ALLOW_WRITES.
+        """
         if not redirect_uris:
             raise ValidationError("At least one redirect_uri is required")
         allow_local = self._settings.app_env != "production"
         validated_uris = [
             validate_redirect_uri(u, allow_localhost_dev=allow_local) for u in redirect_uris
         ]
-        allowed_scopes = parse_and_validate_scopes(scope)
+        allowed_scopes = parse_and_validate_scopes(scope) if scope else list(MCP_OAUTH_SCOPES)
         client_id = f"dc_oauth_{secrets.token_hex(12)}"
         doc = {
             "client_id": client_id,
@@ -183,14 +219,17 @@ class OAuthService:
         client = self.get_client(client_id)
         if client is None:
             raise BadRequestError("Unknown client_id")
-        if redirect_uri not in client.get("redirect_uris", []):
+        if not any(redirect_uri_matches(r, redirect_uri) for r in client.get("redirect_uris", [])):
             raise BadRequestError("redirect_uri is not registered for this client")
         if code_challenge_method != "S256" or not code_challenge:
             raise BadRequestError("PKCE code_challenge_method=S256 is required")
 
-        target_resource = resource or self._settings.mcp_public_url
-        if target_resource != self._settings.mcp_public_url:
+        if resource and normalize_resource(resource) != normalize_resource(
+            self._settings.mcp_public_url
+        ):
             raise BadRequestError("Requested resource does not match this MCP server")
+        # Tokens always carry the canonical MCP_PUBLIC_URL as audience.
+        target_resource = self._settings.mcp_public_url
 
         requested = parse_and_validate_scopes(raw_scope)
         client_allowed = set(client.get("allowed_scopes") or DEFAULT_CLIENT_SCOPES)
@@ -212,8 +251,13 @@ class OAuthService:
         code_challenge: str,
         code_challenge_method: str,
         resource: str | None = None,
+        workspace_id: str | None = None,
     ) -> str:
-        """Issue a single-use authorization code bound to client, PKCE, resource, and scopes."""
+        """Issue a single-use authorization code bound to client, PKCE, resource, and scopes.
+
+        `workspace_id` (chosen on the consent screen) restricts every token of the grant
+        to that one workspace.
+        """
         _, validated_scopes, target_resource = self.validate_authorize_request(
             client_id=client_id,
             redirect_uri=redirect_uri,
@@ -233,6 +277,7 @@ class OAuthService:
                 "scopes": validated_scopes,
                 "code_challenge": code_challenge,
                 "resource": target_resource,
+                "workspace_id": workspace_id,
                 "used": False,
                 "expires_at": datetime.now(UTC) + timedelta(minutes=5),
             }
@@ -271,13 +316,31 @@ class OAuthService:
         if consumed is None:
             raise AuthenticationError("Authorization code already redeemed")
 
+        family_id = secrets.token_hex(12)
+        client = self.get_client(client_id) or {}
+        now = datetime.now(UTC)
+        self._grants.insert_one(
+            {
+                "family_id": family_id,
+                "user_id": doc["user_id"],
+                "email": doc["email"],
+                "client_id": client_id,
+                "client_name": client.get("client_name", client_id),
+                "workspace_id": doc.get("workspace_id"),
+                "scopes": doc["scopes"],
+                "created_at": now,
+                "last_used_at": None,
+                "revoked_at": None,
+            }
+        )
         return self._mint_oauth_tokens(
             user_id=doc["user_id"],
             email=doc["email"],
             client_id=client_id,
             scopes=doc["scopes"],
             resource=doc["resource"],
-            family_id=secrets.token_hex(12),
+            family_id=family_id,
+            workspace_id=doc.get("workspace_id"),
         )
 
     def exchange_refresh_token(
@@ -305,6 +368,9 @@ class OAuthService:
 
         if rec["client_id"] != client_id:
             raise AuthenticationError("Refresh token does not belong to client_id")
+        grant = self._grants.find_one({"family_id": rec["family_id"]})
+        if grant is not None and grant.get("revoked_at") is not None:
+            raise AuthenticationError("This connection was revoked")
 
         exp = rec["expires_at"]
         if isinstance(exp, datetime):
@@ -331,6 +397,7 @@ class OAuthService:
             scopes=granted_scopes,
             resource=rec["resource"],
             family_id=rec["family_id"],
+            workspace_id=rec.get("workspace_id"),
         )
 
     def _mint_oauth_tokens(
@@ -342,6 +409,7 @@ class OAuthService:
         scopes: list[str],
         resource: str,
         family_id: str,
+        workspace_id: str | None = None,
     ) -> dict[str, Any]:
         if self._private_key is None or self._kid is None:
             raise AuthenticationError("Local OAuth signing key is not available")
@@ -362,7 +430,10 @@ class OAuthService:
             "jti": jti,
             "scope": " ".join(scopes),
             "scopes": scopes,
+            "fam": family_id,
         }
+        if workspace_id:
+            payload["wid"] = workspace_id
         access_token = jwt.encode(
             payload,
             self._private_key,
@@ -379,6 +450,7 @@ class OAuthService:
                 "email": email,
                 "scopes": scopes,
                 "resource": resource,
+                "workspace_id": workspace_id,
                 "revoked_at": None,
                 "expires_at": now + timedelta(seconds=self._settings.refresh_token_ttl_seconds),
                 "created_at": now,
@@ -468,6 +540,24 @@ class OAuthService:
         if not isinstance(sub, str) or not sub:
             raise AuthenticationError("OAuth token missing subject")
 
+        fam = payload.get("fam")
+        if isinstance(fam, str) and fam:
+            grant = self._grants.find_one({"family_id": fam}, {"revoked_at": 1})
+            if grant is not None and grant.get("revoked_at") is not None:
+                raise AuthenticationError("This connection was revoked")
+            now = datetime.now(UTC)
+            self._grants.update_one(
+                {
+                    "family_id": fam,
+                    "$or": [
+                        {"last_used_at": None},
+                        {"last_used_at": {"$lt": now - GRANT_LAST_USED_THROTTLE}},
+                    ],
+                },
+                {"$set": {"last_used_at": now}},
+            )
+        wid = payload.get("wid")
+
         raw_scopes = payload.get("scopes")
         if not isinstance(raw_scopes, list):
             scope_str = str(payload.get("scope", ""))
@@ -484,6 +574,62 @@ class OAuthService:
             email=payload.get("email"),
             scopes=frozenset(parsed_scopes),
             client_id=payload.get("client_id"),
+            workspace_id=wid if isinstance(wid, str) and wid else None,
             is_mcp=is_mcp,
             mcp_allow_writes=self._settings.mcp_allow_writes,
+            credential="oauth",
         )
+
+    # ── connected clients (grants) ────────────────────────────────────────────
+    def list_grants(self, *, workspace_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
+        """Active grants bound to a workspace (optionally only one user's)."""
+        query: dict[str, Any] = {"workspace_id": workspace_id, "revoked_at": None}
+        if user_id is not None:
+            query["user_id"] = user_id
+        out = []
+        for g in self._grants.find(query).sort("created_at", -1).limit(200):
+            out.append(
+                {
+                    "id": g["family_id"],
+                    "client_id": g.get("client_id"),
+                    "client_name": g.get("client_name"),
+                    "user_id": g.get("user_id"),
+                    "email": g.get("email"),
+                    "scopes": g.get("scopes", []),
+                    "created_at": g.get("created_at"),
+                    "last_used_at": g.get("last_used_at"),
+                }
+            )
+        return out
+
+    def get_grant(self, family_id: str) -> dict[str, Any] | None:
+        return self._grants.find_one({"family_id": family_id})
+
+    def revoke_grant(self, family_id: str) -> None:
+        now = datetime.now(UTC)
+        self._grants.update_one({"family_id": family_id}, {"$set": {"revoked_at": now}})
+        self._refresh_tokens.update_many({"family_id": family_id}, {"$set": {"revoked_at": now}})
+
+    def mint_probe_token(self, *, user_id: str, email: str, workspace_id: str) -> str:
+        """60-second read-only access token for the admin "Test connection" probe.
+
+        No refresh token and no grant record; it can only list tools / read.
+        """
+        if self._private_key is None or self._kid is None:
+            raise AuthenticationError("Local OAuth signing key is not available")
+        now = datetime.now(UTC)
+        payload = {
+            "sub": user_id,
+            "email": email,
+            "client_id": "dc-connection-check",
+            "iss": self._settings.auth_issuer.rstrip("/"),
+            "aud": self._settings.mcp_public_url,
+            "iat": int(now.timestamp()),
+            "nbf": int(now.timestamp()),
+            "exp": int((now + timedelta(seconds=60)).timestamp()),
+            "jti": secrets.token_hex(12),
+            "scope": " ".join(DEFAULT_CLIENT_SCOPES),
+            "scopes": list(DEFAULT_CLIENT_SCOPES),
+            "wid": workspace_id,
+        }
+        return jwt.encode(payload, self._private_key, algorithm="RS256", headers={"kid": self._kid})

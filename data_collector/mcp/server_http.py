@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import hmac
-import html
 import secrets
 from collections.abc import AsyncIterator
 from typing import Any
@@ -22,13 +21,22 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from data_collector.config import Settings, get_settings
 from data_collector.container import Container, build_container
 from data_collector.domain.exceptions import AuthenticationError, DomainError
+from data_collector.infrastructure.crypto import sign_intent_token, verify_intent_token
 from data_collector.infrastructure.logging import configure_logging
+from data_collector.infrastructure.oauth import WRITE_OAUTH_SCOPES
 from data_collector.mcp.auth import (
     authorization_server_metadata,
     protected_resource_metadata,
     reset_mcp_actor,
     resolve_http_actor,
     set_mcp_actor,
+    www_authenticate_challenge,
+)
+from data_collector.mcp.consent import (
+    SECURITY_HEADERS,
+    render_consent,
+    render_message,
+    render_signin,
 )
 from data_collector.mcp.tools import build_mcp_server
 
@@ -36,6 +44,7 @@ _PUBLIC_PATHS = frozenset(
     {
         "/health/live",
         "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
         "/.well-known/oauth-authorization-server",
         "/.well-known/jwks.json",
         "/oauth/authorize",
@@ -92,14 +101,10 @@ class MCPAuthASGIMiddleware:
         try:
             actor = resolve_http_actor(self.container, headers)
         except AuthenticationError as exc:
-            prm_url = (
-                f"{self.cfg.mcp_public_url.removesuffix('/mcp').rstrip('/')}"
-                "/.well-known/oauth-protected-resource"
-            )
             resp = JSONResponse(
                 {"error": {"code": "UNAUTHENTICATED", "message": exc.message}},
                 status_code=401,
-                headers={"WWW-Authenticate": f'Bearer resource_metadata="{prm_url}"'},
+                headers={"WWW-Authenticate": www_authenticate_challenge(self.cfg)},
             )
             await resp(scope, receive, send)
             return
@@ -203,7 +208,7 @@ def create_mcp_http_app(
             res = ctr.oauth_service.register_client(
                 client_name=str(body.get("client_name", "mcp-client")),
                 redirect_uris=list(body.get("redirect_uris", [])),
-                scope=str(body.get("scope", "workspace:read collection:read records:read")),
+                scope=str(body["scope"]) if body.get("scope") else None,
             )
             return JSONResponse(res, status_code=201)
         except DomainError as exc:
@@ -211,61 +216,202 @@ def create_mcp_http_app(
                 {"error": exc.code, "error_description": exc.message}, status_code=400
             )
 
-    async def oauth_authorize_get(request: Request) -> Any:
-        q = request.query_params
-        cid = q.get("client_id", "")
-        ruri = q.get("redirect_uri", "")
-        raw_scope = q.get("scope", "workspace:read collection:read records:read")
-        cchal = q.get("code_challenge", "")
-        cmeth = q.get("code_challenge_method", "S256")
-        res = q.get("resource", "") or None
-        try:
-            client_doc, scopes, _ = ctr.oauth_service.validate_authorize_request(
-                client_id=cid,
-                redirect_uri=ruri,
-                raw_scope=raw_scope,
-                code_challenge=cchal,
-                code_challenge_method=cmeth,
-                resource=res,
+    _CONSENT_TTL = 600
+    _AUTH_FIELDS = (
+        "client_id",
+        "redirect_uri",
+        "state",
+        "scope",
+        "code_challenge",
+        "code_challenge_method",
+        "resource",
+    )
+
+    def _html(body: str, status: int = 200, csrf: str | None = None) -> HTMLResponse:
+        resp = HTMLResponse(body, status_code=status, headers=dict(SECURITY_HEADERS))
+        if csrf is not None:
+            resp.set_cookie(
+                "dc_oauth_csrf",
+                csrf,
+                httponly=True,
+                samesite="lax",
+                secure=(cfg.app_env == "production"),
+                max_age=_CONSENT_TTL,
             )
+        return resp
+
+    def _redirect(redirect_uri: str, params: dict[str, str]) -> RedirectResponse:
+        sep = "&" if "?" in redirect_uri else "?"
+        return RedirectResponse(url=f"{redirect_uri}{sep}{urlencode(params)}", status_code=302)
+
+    def _deny_redirect(redirect_uri: str, state: str) -> RedirectResponse:
+        params: dict[str, str] = {"error": "access_denied"}
+        if state:
+            params["state"] = state
+        return _redirect(redirect_uri, params)
+
+    def _signin_page(
+        fields: dict[str, str], client_doc: dict[str, Any], scopes: list[str], error: str | None
+    ) -> HTMLResponse:
+        csrf_val = _sign_csrf(secrets.token_hex(16), cfg.intent_secret_key)
+        page = render_signin(
+            client_name=str(client_doc.get("client_name", "MCP client")),
+            redirect_host=urlparse(fields["redirect_uri"]).netloc,
+            scopes=scopes,
+            writes_enabled=cfg.mcp_allow_writes,
+            hidden={**fields, "scope": " ".join(scopes)},
+            csrf_token=csrf_val,
+            error=error,
+        )
+        return _html(page, 401 if error else 200, csrf=csrf_val)
+
+    def _validate(fields: dict[str, str]) -> tuple[dict[str, Any], list[str]]:
+        client_doc, scopes, _ = ctr.oauth_service.validate_authorize_request(
+            client_id=fields["client_id"],
+            redirect_uri=fields["redirect_uri"],
+            raw_scope=fields["scope"],
+            code_challenge=fields["code_challenge"],
+            code_challenge_method=fields["code_challenge_method"],
+            resource=fields["resource"] or None,
+        )
+        return client_doc, scopes
+
+    def _fields(src: Any) -> dict[str, str]:
+        out = {k: str(src.get(k, "") or "") for k in _AUTH_FIELDS}
+        out["code_challenge_method"] = out["code_challenge_method"] or "S256"
+        return out
+
+    async def oauth_authorize_get(request: Request) -> Any:
+        fields = _fields(request.query_params)
+        try:
+            client_doc, scopes = _validate(fields)
         except DomainError as exc:
             return JSONResponse(
                 {"error": "invalid_request", "error_description": exc.message}, status_code=400
             )
+        return _signin_page(fields, client_doc, scopes, None)
 
+    def _user_workspaces(user_id: str) -> list[dict[str, Any]]:
+        out = []
+        for ws in ctr.workspaces.list_for_principal(user_id, limit=100):
+            if ws.get("status", "active") != "active":
+                continue
+            role = ctr.workspaces.get_membership_role(ws["id"], user_id) or "viewer"
+            out.append({"id": ws["id"], "name": ws["name"], "slug": ws["slug"], "role": role})
+        return out
+
+    async def _step_login(request: Request, data: dict[str, Any]) -> Any:
+        fields = _fields(data)
+        try:
+            client_doc, scopes = _validate(fields)
+        except DomainError as exc:
+            return JSONResponse(
+                {"error": "invalid_request", "error_description": exc.message}, status_code=400
+            )
+        if str(data.get("consent", "")).lower() == "deny":
+            return _deny_redirect(fields["redirect_uri"], fields["state"])
+        email = str(data.get("email", ""))
+        try:
+            ctr.auth_service.login(
+                email,
+                str(data.get("password", "")),
+                client_ip=request.client.host if request.client else "unknown",
+            )
+        except DomainError as exc:
+            return _signin_page(fields, client_doc, scopes, exc.message)
+        user = ctr.users.find_by_email(email)
+        if user is None:  # pragma: no cover - login just succeeded
+            return _signin_page(fields, client_doc, scopes, "Invalid credentials")
+        user_id = str(user["_id"])
+        workspaces = _user_workspaces(user_id)
+        if not workspaces:
+            return _html(
+                render_message(
+                    "No workspace",
+                    "Your account is not a member of any active workspace yet. Create or "
+                    "join one in the Data Collector admin, then connect again.",
+                ),
+                403,
+            )
+        ticket = sign_intent_token(
+            {
+                "op": "oauth_consent",
+                "uid": user_id,
+                "email": str(user["email"]),
+                "f": fields,
+                "scopes": scopes,
+            },
+            cfg.intent_secret_key,
+            ttl_seconds=_CONSENT_TTL,
+        )
         csrf_val = _sign_csrf(secrets.token_hex(16), cfg.intent_secret_key)
-        origin = urlparse(ruri).netloc
-        scope_items = "".join(f"<li>{html.escape(s)}</li>" for s in scopes)
-        form = (
-            "<html><body><h2>Authorize MCP Client</h2>"
-            f"<p>Application: <strong>{html.escape(client_doc['client_name'])}</strong> "
-            f"(redirect host: <code>{html.escape(origin)}</code>)</p>"
-            f"<p>Requested scopes:</p><ul>{scope_items}</ul>"
-            "<form method='post' action='/oauth/authorize'>"
-            f"<input type='hidden' name='csrf_token' value='{csrf_val}'/>"
-            f"<input type='hidden' name='client_id' value='{html.escape(cid)}'/>"
-            f"<input type='hidden' name='redirect_uri' value='{html.escape(ruri)}'/>"
-            f"<input type='hidden' name='state' value='{html.escape(q.get('state', ''))}'/>"
-            f"<input type='hidden' name='scope' value='{html.escape(' '.join(scopes))}'/>"
-            f"<input type='hidden' name='code_challenge' value='{html.escape(cchal)}'/>"
-            f"<input type='hidden' name='code_challenge_method' value='{html.escape(cmeth)}'/>"
-            f"<input type='hidden' name='resource' value='{html.escape(res or '')}'/>"
-            "Email: <input name='email' type='email' required/><br/>"
-            "Password: <input name='password' type='password' required/><br/>"
-            "<button type='submit' name='consent' value='approve'>Approve</button> "
-            "<button type='submit' name='consent' value='deny'>Deny</button>"
-            "</form></body></html>"
+        page = render_consent(
+            client_name=str(client_doc.get("client_name", "MCP client")),
+            redirect_host=urlparse(fields["redirect_uri"]).netloc,
+            email=str(user["email"]),
+            scopes=scopes,
+            writes_enabled=cfg.mcp_allow_writes,
+            workspaces=workspaces,
+            ticket=ticket,
+            csrf_token=csrf_val,
         )
-        resp = HTMLResponse(form)
-        resp.set_cookie(
-            "dc_oauth_csrf",
-            csrf_val,
-            httponly=True,
-            samesite="lax",
-            secure=(cfg.app_env == "production"),
-            max_age=300,
+        return _html(page, csrf=csrf_val)
+
+    async def _step_consent(data: dict[str, Any]) -> Any:
+        ticket = verify_intent_token(str(data.get("ticket", "")), cfg.intent_secret_key)
+        if ticket is None or ticket.get("op") != "oauth_consent":
+            return _html(
+                render_message("Session expired", "Please start the connection again."), 400
+            )
+        fields = {k: str(v) for k, v in dict(ticket.get("f") or {}).items()}
+        if str(data.get("consent", "")).lower() != "approve":
+            return _deny_redirect(fields.get("redirect_uri", ""), fields.get("state", ""))
+        try:
+            client_doc, scopes = _validate(fields)
+        except DomainError as exc:
+            return JSONResponse(
+                {"error": "invalid_request", "error_description": exc.message}, status_code=400
+            )
+        user_id = str(ticket["uid"])
+        workspace_id = str(data.get("workspace_id", ""))
+        if workspace_id not in {w["id"] for w in _user_workspaces(user_id)}:
+            return _html(render_message("Not allowed", "Choose one of your workspaces."), 403)
+        if str(data.get("allow_writes", "")) != "on" or not cfg.mcp_allow_writes:
+            scopes = [sc for sc in scopes if sc not in WRITE_OAUTH_SCOPES]
+        if not scopes:
+            scopes = ["workspace:read", "collection:read", "records:read"]
+        try:
+            code = ctr.oauth_service.create_authorization_code(
+                client_id=fields["client_id"],
+                redirect_uri=fields["redirect_uri"],
+                user_id=user_id,
+                email=str(ticket.get("email", "")),
+                scopes=scopes,
+                code_challenge=fields["code_challenge"],
+                code_challenge_method=fields["code_challenge_method"],
+                resource=fields["resource"] or None,
+                workspace_id=workspace_id,
+            )
+        except DomainError as exc:
+            return JSONResponse(
+                {"error": exc.code, "error_description": exc.message}, status_code=exc.http_status
+            )
+        ctr.audit_service.record(
+            tenant=workspace_id,
+            actor_id=user_id,
+            action="oauth.grant",
+            target=f"oauth_client:{fields['client_id']}",
+            decision="allow",
+            metadata={
+                "client_name": client_doc.get("client_name"),
+                "scopes": scopes,
+                "redirect_host": urlparse(fields["redirect_uri"]).netloc,
+            },
         )
-        return resp
+        params = {"code": code}
+        if fields.get("state"):
+            params["state"] = fields["state"]
+        return _redirect(fields["redirect_uri"], params)
 
     async def oauth_authorize_post(request: Request) -> Any:
         data = await _read_body(request)
@@ -280,6 +426,14 @@ def create_mcp_http_app(
                 status_code=403,
             )
 
+        step = str(data.get("step", ""))
+        if step == "login":
+            return await _step_login(request, data)
+        if step == "consent":
+            return await _step_consent(data)
+
+        # Legacy one-shot form (email + password + consent): kept for existing automation
+        # and the deployment verifier. Grants from it are not bound to a workspace.
         redirect_uri = str(data.get("redirect_uri", ""))
         state = str(data.get("state", ""))
         client_id = str(data.get("client_id", ""))
@@ -303,11 +457,7 @@ def create_mcp_http_app(
             )
 
         if str(data.get("consent", "approve")).lower() == "deny":
-            params: dict[str, str] = {"error": "access_denied"}
-            if state:
-                params["state"] = state
-            sep = "&" if "?" in redirect_uri else "?"
-            return RedirectResponse(url=f"{redirect_uri}{sep}{urlencode(params)}", status_code=302)
+            return _deny_redirect(redirect_uri, state)
 
         try:
             email = str(data.get("email", ""))
@@ -332,9 +482,7 @@ def create_mcp_http_app(
             ok_params: dict[str, str] = {"code": code}
             if state:
                 ok_params["state"] = state
-            sep = "&" if "?" in redirect_uri else "?"
-            target_url = f"{redirect_uri}{sep}{urlencode(ok_params)}"
-            return RedirectResponse(url=target_url, status_code=302)
+            return _redirect(redirect_uri, ok_params)
         except DomainError as exc:
             return JSONResponse(
                 {"error": exc.code, "error_description": exc.message},
@@ -386,6 +534,12 @@ def create_mcp_http_app(
     routes: list[Any] = [
         Route("/health/live", health_live, methods=["GET"]),
         Route("/.well-known/oauth-protected-resource", oauth_protected_resource, methods=["GET"]),
+        # RFC 9728 path-suffixed form for a resource at /mcp (tried first by MCP clients).
+        Route(
+            "/.well-known/oauth-protected-resource/mcp",
+            oauth_protected_resource,
+            methods=["GET"],
+        ),
         Route("/.well-known/oauth-authorization-server", oauth_auth_server, methods=["GET"]),
     ]
     if cfg.oauth_mode == "builtin":

@@ -94,3 +94,5 @@ class Actor:
     allowed_collection_ids: frozenset[str] | None = None  # Optional per-key collection allowlist
     is_mcp: bool = False
     mcp_allow_writes: bool = False
+    # How the caller authenticated: session | api_key | mcp_pat | oauth (audit attribution)
+    credential: str | None = None
