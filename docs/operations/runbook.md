@@ -32,3 +32,20 @@ mongorestore --uri="$MONGODB_URI" --nsFrom="${MONGODB_DB}.*" --nsTo="dc_rehearsa
 - Disable `/mcp` ingress at reverse proxy while REST `/api/v1` continues.
 - Revoke compromised API keys via `POST /api/v1/keys/{kid}/revoke`.
 - Redeploy previous immutable container tag if needed.
+
+## 6. Deleting a collection
+
+Admin UI: open the collection (Data Explorer) → **Delete collection** (visible to owner/admin only) → check the counts → type the slug → Delete.
+
+API (owner or admin token; an unrestricted API key with `collection:delete` also works):
+
+```bash
+CID=<collection id>
+curl -s -X POST -H "Authorization: Bearer $TOKEN" https://data.devart.solutions/api/v1/collections/$CID/prepare-delete | tee prep.json
+# read slug + records.total in prep.json, then:
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"confirmation_token\": \"$(jq -r .confirmation_token prep.json)\", \"confirm_slug\": \"$(jq -r .slug prep.json)\"}" \
+  https://data.devart.solutions/api/v1/collections/$CID
+```
+
+The token lasts 5 minutes and is single-use. Check the audit log for `collection.delete` afterwards. Take a backup first (§4): this is a hard delete.
