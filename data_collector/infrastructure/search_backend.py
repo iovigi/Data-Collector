@@ -11,6 +11,7 @@ class SearchHit:
     source_id: str
     score: float
     highlights: list[dict[str, str]] = field(default_factory=list)
+    source_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class SearchQueryResult:
     next_cursor: str | None = None
     has_more: bool = False
     total_estimated: int | None = None
+    result_window_limited: bool = False
 
 
 class SearchBackend(Protocol):

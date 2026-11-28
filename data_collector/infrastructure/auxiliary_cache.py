@@ -69,14 +69,14 @@ class AuxiliaryCache:
                 out.append(None)
         return out
 
-    def set_json(self, key: str, payload: dict[str, Any], ttl_seconds: int) -> bool:
+    def set_json(self, key: str, payload: dict[str, Any], ttl_seconds: int | None) -> bool:
         if self._client is None:
             return False
         try:
             self._client.set(
                 key,
                 json.dumps(payload, separators=(",", ":")),
-                ex=max(1, ttl_seconds),
+                ex=None if ttl_seconds is None else max(1, ttl_seconds),
             )
             return True
         except Exception:

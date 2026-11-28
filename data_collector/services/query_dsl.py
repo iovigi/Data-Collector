@@ -311,15 +311,13 @@ def encode_cursor(
     return f"{b64}.{mac}"
 
 
-def decode_cursor(
+def decode_cursor_payload(
     *,
     cursor: str,
     secret: str,
     expected_sig: str,
-    sort_field: str,
-    sort_direction: int,
 ) -> dict[str, Any]:
-    """Decode, verify HMAC & query-binding, and return MongoDB keyset filter."""
+    """Decode the payload and verify its signature and query binding."""
     try:
         b64, mac = cursor.split(".", 1)
     except ValueError as exc:
@@ -334,9 +332,24 @@ def decode_cursor(
         payload = json.loads(urlsafe_b64decode(padded).decode("utf-8"))
     except Exception as exc:
         raise ValidationError("Malformed pagination cursor") from exc
+    if not isinstance(payload, dict):
+        raise ValidationError("Malformed pagination cursor")
     if payload.get("s") != expected_sig:
         raise ValidationError("Cursor does not match collection or query parameters")
 
+    return payload
+
+
+def decode_cursor(
+    *,
+    cursor: str,
+    secret: str,
+    expected_sig: str,
+    sort_field: str,
+    sort_direction: int,
+) -> dict[str, Any]:
+    """Decode the cursor and return a MongoDB keyset filter."""
+    payload = decode_cursor_payload(cursor=cursor, secret=secret, expected_sig=expected_sig)
     last_oid = ObjectId(payload["id"])
     cmp_op = "$gt" if sort_direction >= 0 else "$lt"
     if sort_field == "_id":

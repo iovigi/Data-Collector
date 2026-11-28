@@ -158,6 +158,13 @@ def test_fulltext_backfill_hydration_and_soft_delete_suppression() -> None:
     ).get_json()
     assert "id" in col, col
 
+    status_url = f"/api/v1/collections/{col['id']}/search/status"
+    search_url = f"/api/v1/collections/{col['id']}/records/fulltext"
+    cold = client.get(status_url, headers=h_a).get_json()
+    assert cold["state"] == "not_indexed"
+    assert cold["ready"] is False
+    assert client.post(search_url, json={"query": "Payment"}, headers=h_a).status_code == 503
+
     r1 = client.post(
         f"/api/v1/collections/{col['id']}/records",
         json={"data": {"details": {"message": "Payment failed at gateway"}}},
@@ -192,6 +199,21 @@ def test_fulltext_backfill_hydration_and_soft_delete_suppression() -> None:
     assert len(items) == 1
     assert items[0]["record"]["id"] == r1["id"]
 
+    first = client.post(search_url, json={"query": "Payment", "limit": 1}, headers=h_a).get_json()
+    assert first["has_more"] is True
+    next_cursor = first["next_cursor"]
+    second = client.post(
+        search_url, json={"query": "Payment", "limit": 1, "cursor": next_cursor}, headers=h_a
+    ).get_json()
+    assert second["has_more"] is False
+    assert first["items"][0]["record"]["id"] != second["items"][0]["record"]["id"]
+    for body in (
+        {"query": "other term", "limit": 1, "cursor": next_cursor},
+        {"query": "Payment", "limit": 1, "cursor": "1"},
+        {"query": "Payment", "filters": {"field": "details.message", "op": "eq", "value": "x"}},
+    ):
+        assert client.post(search_url, json=body, headers=h_a).status_code == 422
+
     # Tenant B cannot access Tenant A's collection (404/403).
     ft_b = client.post(
         f"/api/v1/collections/{col['id']}/records/fulltext",
@@ -217,6 +239,18 @@ def test_fulltext_backfill_hydration_and_soft_delete_suppression() -> None:
     returned_ids = [it["record"]["id"] for it in ft_after_del.get_json()["items"]]
     assert r1["id"] not in returned_ids
     assert r2["id"] in returned_ids
+
+    edit = client.patch(
+        f"/api/v1/collections/{col['id']}/records/{r2['id']}",
+        json={"patch": {"details": {"message": "New text"}}, "expected_version": r2["version"]},
+        headers=h_a,
+    )
+    assert edit.status_code == 200
+    stale_search = client.post(search_url, json={"query": "Payment"}, headers=h_a)
+    assert stale_search.get_json()["items"] == []
+    container.search_indexer.backfill_collection(col["id"], reset=True)
+    current_search = client.post(search_url, json={"query": "New text"}, headers=h_a)
+    assert current_search.get_json()["items"][0]["record"]["version"] == edit.get_json()["version"]
 
     # New read-only MCP tools are registered
     tools = list_tool_names()

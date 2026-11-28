@@ -353,6 +353,7 @@ export interface FulltextSearchHit {
 }
 
 export interface FulltextSearchResponse {
+  result_window_limited?: boolean;
   items: FulltextSearchHit[];
   next_cursor: string | null;
   has_more: boolean;

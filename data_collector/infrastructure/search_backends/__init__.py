@@ -11,8 +11,6 @@ from data_collector.infrastructure.search_backends.memory import InMemorySearchB
 
 def build_search_backend(settings: Settings) -> SearchBackend:
     """Create the configured external SearchBackend without failing API startup."""
-    if not settings.fulltext_search_enabled or settings.fulltext_search_backend == "disabled":
-        return DisabledSearchBackend()
     if settings.fulltext_search_backend == "memory":
         return InMemorySearchBackend()
     if settings.fulltext_search_backend == "meilisearch":
