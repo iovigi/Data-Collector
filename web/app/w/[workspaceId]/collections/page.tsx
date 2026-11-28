@@ -3,8 +3,9 @@ import { Link } from "@/lib/router";
 import { useParams } from "@/lib/router";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
-import type { Collection, Project } from "@/lib/api/types";
+import type { BatchCollectionCountsResponse, Collection, CollectionCountResponse, Project } from "@/lib/api/types";
 import { AppShell } from "@/components/layout/AppShell";
+import { CountBadge } from "@/components/data/CountBadge";
 import { Badge, Button, Card, EmptyState, ErrorState, PageHeader, SkeletonTable } from "@/components/ui/primitives";
 
 export default function WorkspaceCollectionsPage() {
@@ -32,6 +33,23 @@ export default function WorkspaceCollectionsPage() {
       allCollections.push({ ...c, projectName: p.name });
     }
   });
+
+  const batchIds = allCollections.slice(0, 25).map((c) => c.id);
+  const countsQuery = useQuery({
+    queryKey: ["collection-counts-batch", wid, batchIds.join(",")],
+    queryFn: () =>
+      apiFetch<BatchCollectionCountsResponse>("/collections/counts", {
+        method: "POST",
+        body: { collection_ids: batchIds, include_trash: false },
+      }),
+    enabled: batchIds.length > 0,
+    staleTime: 60_000,
+  });
+
+  const countMap = new Map<string, CollectionCountResponse>();
+  for (const item of countsQuery.data?.items ?? []) {
+    countMap.set(item.collection_id, item);
+  }
 
   return (
     <AppShell workspaceId={wid}>
@@ -69,8 +87,11 @@ export default function WorkspaceCollectionsPage() {
                 <div className="font-semibold">{col.slug}</div>
                 <Badge tone="primary">v{col.schema_version}</Badge>
               </div>
-              <div className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
-                Project: {col.projectName} · Retention: {col.retention_days}d
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-[hsl(var(--muted-foreground))]">
+                <span>
+                  Project: {col.projectName} · Retention: {col.retention_days}d
+                </span>
+                <CountBadge compact bucket={countMap.get(col.id)?.active} />
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <Link href={`/w/${wid}/collections/${col.id}/data`}>

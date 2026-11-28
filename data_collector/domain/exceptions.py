@@ -55,6 +55,20 @@ class QueryTooBroadError(ValidationError):
     code = "QUERY_TOO_BROAD"
 
 
+class QueryNotIndexedError(ValidationError):
+    """Structured query or sort lacks a bounded source index."""
+
+    code = "QUERY_NOT_INDEXED"
+
+
+class SearchBackendUnavailableError(DomainError):
+    """External full-text search backend is disabled or unavailable."""
+
+    code = "SEARCH_INDEX_NOT_READY"
+    http_status = 503
+    mcp_code = "TEMPORARY_UNAVAILABLE"
+
+
 class BadRequestError(DomainError):
     code = "BAD_REQUEST"
     http_status = 400

@@ -18,7 +18,9 @@ from bson import ObjectId
 
 from data_collector.domain.exceptions import ValidationError
 
-ALLOWED_OPS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "in", "exists", "contains"})
+ALLOWED_OPS = frozenset(
+    {"eq", "ne", "gt", "gte", "lt", "lte", "in", "exists", "contains", "array_contains", "between"}
+)
 BUILTIN_METADATA_FIELDS = frozenset({"created_at", "updated_at", "version", "id"})
 FORBIDDEN_SEGMENTS = frozenset({"__proto__", "constructor", "prototype"})
 MAX_DEPTH = 4
@@ -195,10 +197,50 @@ def compile_filter(
                 )
             escaped = re.escape(val)
             return {mongo_field: {"$regex": escaped, "$options": "i"}}
+        if op == "array_contains":
+            if isinstance(val, (dict, list)):
+                raise ValidationError("'array_contains' value must be a scalar")
+            val = _coerce_scalar(field, val)
+            return {mongo_field: val}
+        if op == "between":
+            if not isinstance(val, list) or len(val) != 2:
+                raise ValidationError("'between' value must be a 2-element [min, max] array")
+            low = _coerce_scalar(field, val[0])
+            high = _coerce_scalar(field, val[1])
+            return {mongo_field: {"$gte": low, "$lte": high}}
 
         raise ValidationError(f"Unsupported operator '{op}'")
 
     return _compile(node, 1)
+
+
+def iter_filter_predicates(node: dict[str, Any] | None) -> list[tuple[str, str, Any]]:
+    """Extract all (field, op, value) predicates from a validated Safe Query DSL AST."""
+    if not node:
+        return []
+    out: list[tuple[str, str, Any]] = []
+
+    def _walk(cur: Any) -> None:
+        if not isinstance(cur, dict):
+            return
+        if "and" in cur and isinstance(cur["and"], list):
+            for item in cur["and"]:
+                _walk(item)
+            return
+        if "or" in cur and isinstance(cur["or"], list):
+            for item in cur["or"]:
+                _walk(item)
+            return
+        if "not" in cur:
+            _walk(cur["not"])
+            return
+        field = cur.get("field")
+        op = cur.get("op")
+        if isinstance(field, str) and isinstance(op, str):
+            out.append((field, op, cur.get("value")))
+
+    _walk(node)
+    return out
 
 
 def compile_projection(

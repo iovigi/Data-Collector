@@ -112,3 +112,25 @@ class HistogramRequest(BaseModel):
     date_field: str = Field(default="created_at", min_length=1, max_length=128)
     interval: str = Field(default="day", pattern="^(day|week|month)$")
     filter: dict[str, Any] | None = None
+
+
+class BatchCollectionCountsRequest(BaseModel):
+    collection_ids: list[str] = Field(min_length=1, max_length=100)
+    include_trash: bool = False
+
+
+class FulltextSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=512)
+    fields: list[str] | None = Field(default=None, max_length=25)
+    filter: dict[str, Any] | None = None
+    limit: int | None = Field(default=None, ge=1, le=100)
+    cursor: str | None = Field(default=None, max_length=2048)
+    sort: str = Field(default="relevance", pattern="^(relevance|created_at_desc|created_at_asc)$")
+
+
+class SearchPlanRequest(BaseModel):
+    filter: dict[str, Any] | None = None
+    sort: list[SortSpec] | None = Field(default=None, max_length=2)
+    fields: list[str] | None = Field(default=None, max_length=50)
+    mode: str = Field(default="structured", pattern="^(structured|fulltext)$")
+    explain: bool = False

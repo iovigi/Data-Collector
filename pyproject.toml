@@ -58,6 +58,7 @@ iis = [
 data-collector = "data_collector.cli:main"
 dc-api = "data_collector.app:run_api"
 dc-worker = "data_collector.workers.main:main"
+dc-search-indexer = "data_collector.workers.search_indexer_main:main"
 dc-mcp-stdio = "data_collector.mcp.server_stdio:main"
 dc-mcp-http = "data_collector.mcp.server_http:main"
 

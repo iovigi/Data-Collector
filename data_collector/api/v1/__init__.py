@@ -9,12 +9,15 @@ from data_collector.api.v1.analytics import analytics_bp
 from data_collector.api.v1.audit import audit_bp
 from data_collector.api.v1.auth import auth_bp
 from data_collector.api.v1.collections import collections_bp
+from data_collector.api.v1.counts import counts_bp
+from data_collector.api.v1.fulltext import fulltext_bp
 from data_collector.api.v1.jobs import jobs_bp
 from data_collector.api.v1.keys import keys_bp
 from data_collector.api.v1.m11 import m11_bp
 from data_collector.api.v1.mcp_access import mcp_access_bp
 from data_collector.api.v1.projects import projects_bp
 from data_collector.api.v1.records import records_bp
+from data_collector.api.v1.search_diagnostics import search_diagnostics_bp
 from data_collector.api.v1.workspaces import workspaces_bp
 
 
@@ -24,6 +27,9 @@ def create_v1_blueprint() -> Blueprint:
     v1.register_blueprint(workspaces_bp)
     v1.register_blueprint(projects_bp)
     v1.register_blueprint(collections_bp)
+    v1.register_blueprint(counts_bp)
+    v1.register_blueprint(fulltext_bp)
+    v1.register_blueprint(search_diagnostics_bp)
     v1.register_blueprint(records_bp)
     v1.register_blueprint(jobs_bp)
     v1.register_blueprint(keys_bp)

@@ -12,16 +12,24 @@ import { apiFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import type {
   Collection,
+  CollectionCountResponse,
   FilterOp,
+  FulltextSearchResponse,
   JobItem,
   RecordItem,
   SafeFilterNode,
   SavedQuery,
   SearchRecordsResponse,
+  SearchStatusResponse,
   WorkspaceCapabilities,
 } from "@/lib/api/types";
 import { AppShell } from "@/components/layout/AppShell";
 import { DeleteCollectionDialog } from "@/components/collections/DeleteCollectionDialog";
+import { CountBadge } from "@/components/data/CountBadge";
+import { FieldVisibilityPicker, discoverRecordPaths } from "@/components/data/FieldVisibilityPicker";
+import { FullTextSearchBar } from "@/components/data/FullTextSearchBar";
+import { NestedValuePreview, getNestedValue } from "@/components/data/NestedValuePreview";
+import { RecordDetailDrawer } from "@/components/data/RecordDetailDrawer";
 import { useToast } from "@/components/providers";
 import {
   Badge,
@@ -46,7 +54,18 @@ interface FilterRow {
 
 const PAGE_SIZE = 25;
 const DATE_FIELDS = new Set(["created_at", "updated_at"]);
-const FILTER_OPS: FilterOp[] = ["eq", "ne", "gt", "gte", "lt", "lte", "in", "exists", "contains"];
+const FILTER_OPS: FilterOp[] = [
+  "eq",
+  "ne",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "in",
+  "between",
+  "array_contains",
+  "exists",
+];
 
 type FieldType = "string" | "number" | "boolean" | "datetime" | "unknown";
 
@@ -110,6 +129,14 @@ function buildAst(
         .map((s) => s.trim())
         .filter((s) => s !== "")
         .map((s) => coerceValue(s, type));
+    } else if (r.op === "between") {
+      const parts = r.value
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s !== "")
+        .slice(0, 2)
+        .map((s) => coerceValue(s, type));
+      value = parts;
     } else {
       value = coerceValue(r.value, type);
     }
@@ -144,6 +171,21 @@ export default function DataExplorerPage() {
   const [trashCursorStack, setTrashCursorStack] = useState<Array<string | null>>([null]);
   const trashCursor = trashCursorStack[trashCursorStack.length - 1] ?? null;
   const [tab, setTab] = useState<"active" | "trash">("active");
+  const [searchMode, setSearchMode] = useState<"structured" | "fulltext">("structured");
+  const [fulltextQueryText, setFulltextQueryText] = useState<string | null>(null);
+  const [fulltextCursor, setFulltextCursor] = useState<string | null>(null);
+  const [inspectedRecord, setInspectedRecord] = useState<RecordItem | null>(null);
+  const [customColumns, setCustomColumns] = useState<string[] | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem(`dc:cols:${wid}:${cid}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : null;
+    } catch {
+      return null;
+    }
+  });
 
   // Record Create/Edit/Conflict/Delete modals
   const [openCreate, setOpenCreate] = useState(false);
@@ -172,6 +214,46 @@ export default function DataExplorerPage() {
   const capsQuery = useQuery({
     queryKey: ["capabilities", wid],
     queryFn: () => apiFetch<WorkspaceCapabilities>(`/workspaces/${wid}/capabilities`),
+  });
+
+  const countQuery = useQuery({
+    queryKey: ["collection-count", wid, cid],
+    queryFn: () => apiFetch<CollectionCountResponse>(`/collections/${cid}/record-count`),
+    staleTime: 60_000,
+  });
+
+  const refreshCountMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<CollectionCountResponse>(`/collections/${cid}/record-count/refresh`, {
+        method: "POST",
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["collection-count", wid, cid], data);
+      toast({ title: "Record count refreshed", variant: "success" });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Count refresh failed", description: err.message, variant: "error" }),
+  });
+
+  const searchStatusQuery = useQuery({
+    queryKey: ["search-status", wid, cid],
+    queryFn: () => apiFetch<SearchStatusResponse>(`/collections/${cid}/search/status`),
+    staleTime: 30_000,
+  });
+
+  const fulltextQuery = useQuery({
+    queryKey: ["records-fulltext", wid, cid, fulltextQueryText, fulltextCursor],
+    queryFn: () =>
+      apiFetch<FulltextSearchResponse>(`/collections/${cid}/records/fulltext`, {
+        method: "POST",
+        body: {
+          query: fulltextQueryText,
+          limit: PAGE_SIZE,
+          cursor: fulltextCursor,
+        },
+      }),
+    enabled: tab === "active" && searchMode === "fulltext" && Boolean(fulltextQueryText),
+    placeholderData: keepPreviousData,
   });
 
   const searchQuery = useQuery({
@@ -366,21 +448,50 @@ export default function DataExplorerPage() {
 
   const caps = capsQuery.data?.features;
 
+  const currentQuery =
+    tab === "trash"
+      ? trashQuery
+      : searchMode === "fulltext" && fulltextQueryText
+        ? fulltextQuery
+        : searchQuery;
+  const activeRows: RecordItem[] = useMemo(() => {
+    if (tab === "active" && searchMode === "fulltext" && fulltextQueryText) {
+      return (fulltextQuery.data?.items ?? []).map((h) => h.record);
+    }
+    return (
+      (tab === "trash" ? trashQuery.data?.items : searchQuery.data?.items) ?? []
+    );
+  }, [tab, searchMode, fulltextQueryText, fulltextQuery.data, trashQuery.data, searchQuery.data]);
+
+  const discoveredPaths = useMemo(
+    () => discoverRecordPaths(schemaPropDefs, activeRows),
+    [schemaPropDefs, activeRows]
+  );
+
+  const visibleColumns = useMemo(() => {
+    if (customColumns && customColumns.length > 0) return customColumns;
+    if (schemaProps.length > 0) return schemaProps.slice(0, 6);
+    return discoveredPaths.slice(0, 6).map((p) => p.path);
+  }, [customColumns, schemaProps, discoveredPaths]);
+
+  const handleColumnsChange = (next: string[]) => {
+    setCustomColumns(next);
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(`dc:cols:${wid}:${cid}`, JSON.stringify(next));
+      } catch {
+        // ignore storage quota errors
+      }
+    }
+  };
+
   const columns = useMemo<ColumnDef<RecordItem>[]>(() => {
-    const dataCols: ColumnDef<RecordItem>[] = schemaProps.slice(0, 6).map((field) => ({
+    const dataCols: ColumnDef<RecordItem>[] = visibleColumns.map((field) => ({
       id: `data.${field}`,
       header: field,
-      cell: ({ row }) => {
-        const val = row.original.data[field];
-        if (val === undefined || val === null) {
-          return <span className="text-[hsl(var(--muted-foreground))]">—</span>;
-        }
-        return (
-          <span className="block max-w-[220px] truncate font-mono text-xs">
-            {typeof val === "object" ? JSON.stringify(val) : String(val)}
-          </span>
-        );
-      },
+      cell: ({ row }) => (
+        <NestedValuePreview value={getNestedValue(row.original.data, field)} />
+      ),
     }));
 
     return [
@@ -400,14 +511,23 @@ export default function DataExplorerPage() {
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => {
-                  setEditingRecord(rec);
-                  setEditJson(JSON.stringify(rec.data, null, 2));
-                  setConflictRecord(null);
-                }}
+                onClick={() => setInspectedRecord(rec)}
               >
-                {caps?.can_write_records ? "Edit" : "View"}
+                Inspect
               </Button>
+              {caps?.can_write_records && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setEditingRecord(rec);
+                    setEditJson(JSON.stringify(rec.data, null, 2));
+                    setConflictRecord(null);
+                  }}
+                >
+                  Edit
+                </Button>
+              )}
               {tab === "active" && caps?.can_delete_records && (
                 <Button
                   size="sm"
@@ -433,10 +553,8 @@ export default function DataExplorerPage() {
         },
       },
     ];
-  }, [schemaProps, caps, tab, restoreMutation]);
+  }, [visibleColumns, caps, tab, restoreMutation]);
 
-  const currentQuery = tab === "active" ? searchQuery : trashQuery;
-  const activeRows = currentQuery.data?.items ?? [];
   const pageStack = tab === "active" ? cursorStack : trashCursorStack;
   const setPageStack = tab === "active" ? setCursorStack : setTrashCursorStack;
 
@@ -450,9 +568,20 @@ export default function DataExplorerPage() {
     <AppShell workspaceId={wid}>
       <PageHeader
         title={`Data Explorer · ${colQuery.data?.slug ?? "Collection"}`}
-        subtitle="Safe Query DSL filtering, cursor pagination, schema-validated editing & jobs"
+        subtitle="Safe Query DSL filtering, cursor pagination, schema-validated editing & nested inspection"
         actions={
           <>
+            <CountBadge
+              bucket={countQuery.data?.active}
+              label="Active"
+              onRefresh={() => refreshCountMutation.mutate()}
+              refreshing={refreshCountMutation.isPending}
+            />
+            <FieldVisibilityPicker
+              availablePaths={discoveredPaths}
+              visibleColumns={visibleColumns}
+              onChange={handleColumnsChange}
+            />
             <Link href={`/w/${wid}/collections/${cid}/schema`}>
               <Button size="sm" variant="secondary">
                 Schema (v{colQuery.data?.schema_version ?? 1})
@@ -504,9 +633,42 @@ export default function DataExplorerPage() {
         </Button>
       </div>
 
-      {/* Filter Builder */}
+      {/* Filter & Fulltext Search Card */}
       {tab === "active" && (
         <Card className="mb-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[hsl(var(--border))] pb-2">
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="sm"
+                variant={searchMode === "structured" ? "primary" : "secondary"}
+                onClick={() => setSearchMode("structured")}
+              >
+                Structured Filters
+              </Button>
+              <Button
+                size="sm"
+                variant={searchMode === "fulltext" ? "primary" : "secondary"}
+                onClick={() => setSearchMode("fulltext")}
+              >
+                Full-text Search
+              </Button>
+            </div>
+          </div>
+          {searchMode === "fulltext" ? (
+            <FullTextSearchBar
+              status={searchStatusQuery.data}
+              isSearching={fulltextQuery.isFetching}
+              onSearch={(q) => {
+                setFulltextQueryText(q);
+                setFulltextCursor(null);
+              }}
+              onClear={() => {
+                setFulltextQueryText(null);
+                setFulltextCursor(null);
+              }}
+            />
+          ) : (
+            <>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold uppercase text-[hsl(var(--muted-foreground))]">
@@ -652,6 +814,8 @@ export default function DataExplorerPage() {
             {/* Enables Enter-to-apply from any input */}
             <button type="submit" hidden aria-hidden tabIndex={-1} />
           </form>
+            </>
+          )}
         </Card>
       )}
 
@@ -948,6 +1112,18 @@ export default function DataExplorerPage() {
           });
           router.push(`/w/${wid}/collections`);
         }}
+      />
+      <RecordDetailDrawer
+        record={inspectedRecord}
+        onClose={() => setInspectedRecord(null)}
+        canEdit={Boolean(caps?.can_write_records)}
+        onEdit={(rec) => {
+          setInspectedRecord(null);
+          setEditingRecord(rec);
+          setEditJson(JSON.stringify(rec.data, null, 2));
+          setConflictRecord(null);
+        }}
+        onCopyToast={(msg) => toast({ title: msg, variant: "success" })}
       />
     </AppShell>
   );

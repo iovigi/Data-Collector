@@ -110,6 +110,43 @@ class Settings(BaseSettings):
     # Serve /mcp + OAuth inside the same WSGI process (stateless JSON Streamable HTTP).
     mcp_http_in_process: bool = Field(default=False)
 
+    # Tiered Collection Counts (million-record safe)
+    collection_counts_enabled: bool = Field(default=True)
+    collection_count_cache_ttl_seconds: int = Field(default=900, ge=10, le=86400)
+    collection_count_max_time_ms: int = Field(default=1000, ge=100, le=30000)
+    collection_count_max_concurrent: int = Field(default=1, ge=1, le=16)
+    collection_count_batch_max: int = Field(default=25, ge=1, le=100)
+    collection_count_background_refresh: bool = Field(default=False)
+
+    # Structured Search Planner
+    structured_search_max_time_ms: int = Field(default=1500, ge=100, le=30000)
+    structured_search_max_page_size: int = Field(default=100, ge=1, le=500)
+    structured_search_allow_unindexed: bool = Field(default=False)
+    structured_search_block_broad_contains: bool = Field(default=True)
+
+    # External Full-Text Search & Isolated Backfill Indexer (disabled by default)
+    fulltext_search_enabled: bool = Field(default=False)
+    fulltext_search_backend: Literal["disabled", "memory", "meilisearch", "opensearch"] = Field(
+        default="disabled"
+    )
+    fulltext_search_url: str = Field(default="")
+    fulltext_search_api_key: str = Field(default="")
+    fulltext_search_timeout_ms: int = Field(default=2000, ge=100, le=30000)
+    fulltext_search_max_concurrent: int = Field(default=4, ge=1, le=64)
+    fulltext_search_max_query_length: int = Field(default=256, ge=16, le=1024)
+    fulltext_search_batch_hydrate_max: int = Field(default=50, ge=1, le=200)
+    search_source_mongodb_uri: str = Field(default="")
+    search_auxiliary_mongodb_uri: str = Field(default="")
+    search_auxiliary_mongodb_db: str = Field(default="data_collector_search_aux")
+    search_backfill_enabled: bool = Field(default=False)
+    search_backfill_batch_size: int = Field(default=100, ge=1, le=1000)
+    search_backfill_max_docs_per_second: int = Field(default=50, ge=1, le=10000)
+    search_backfill_max_bytes_per_second: int = Field(default=1_048_576, ge=1024)
+    search_backfill_max_concurrent_collections: int = Field(default=1, ge=1, le=8)
+    search_backfill_pause_on_high_db_latency: bool = Field(default=True)
+    search_backfill_max_db_latency_ms: int = Field(default=250, ge=10, le=10000)
+    search_external_auxiliary_namespace: str = Field(default="dc_search_v1")
+
     @field_validator("app_env", mode="before")
     @classmethod
     def _normalize_env(cls, v: object) -> str:

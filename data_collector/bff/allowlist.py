@@ -26,7 +26,9 @@ _PATTERNS = [
     rf"projects/{_ID}",
     rf"projects/{_ID}/(archive|restore|collections)",
     rf"collections/{_ID}",
-    rf"collections/{_ID}/(prepare-delete|records|records/batch|records/search|records/trash|imports|exports"
+    r"collections/counts",
+    rf"collections/{_ID}/(prepare-delete|record-count|record-count/refresh|records|records/batch"
+    r"|records/search|records/fulltext|records/trash|search/status|search/plan|imports|exports"
     r"|saved-queries|schema-migrations/preview|schema-migrations/apply)",
     rf"collections/{_ID}/analytics/(aggregate|distinct|histogram|fields)",
     rf"collections/{_ID}/records/{_ID}",

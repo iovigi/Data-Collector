@@ -8,6 +8,7 @@ from typing import Any
 from pymongo import MongoClient
 
 from data_collector.config import Settings, get_settings
+from data_collector.infrastructure.auxiliary_cache import AuxiliaryCache
 from data_collector.infrastructure.job_queue import JobQueue
 from data_collector.infrastructure.mongo import MongoManager
 from data_collector.infrastructure.oauth import OAuthService
@@ -25,14 +26,18 @@ from data_collector.infrastructure.repositories.tenant_repo import (
     UserRepository,
     WorkspaceRepository,
 )
+from data_collector.infrastructure.search_backend import SearchBackend
+from data_collector.infrastructure.search_backends import build_search_backend
 from data_collector.infrastructure.storage import ArtifactStore, LocalVolumeArtifactStore
 from data_collector.services.admin_ext_service import AdminExtensionService
 from data_collector.services.analytics_service import AnalyticsService
 from data_collector.services.audit_service import AuditService
 from data_collector.services.auth_service import AuthService
+from data_collector.services.collection_count_service import CollectionCountService
 from data_collector.services.collection_deletion_service import CollectionDeletionService
 from data_collector.services.collection_service import CollectionService
 from data_collector.services.export_service import ExportService
+from data_collector.services.fulltext_search_service import FulltextSearchService
 from data_collector.services.import_service import ImportService
 from data_collector.services.m11_service import (
     SavedQueryService,
@@ -42,6 +47,7 @@ from data_collector.services.m11_service import (
 )
 from data_collector.services.mcp_access_service import McpAccessService
 from data_collector.services.record_service import RecordService
+from data_collector.services.search_indexer import SearchIndexer
 
 
 @dataclass
@@ -76,6 +82,11 @@ class Container:
     admin_ext: AdminExtensionService
     analytics: AnalyticsService
     mcp_access: McpAccessService
+    auxiliary_cache: AuxiliaryCache
+    collection_counts: CollectionCountService
+    search_backend: SearchBackend
+    fulltext_search: FulltextSearchService
+    search_indexer: SearchIndexer
     job_queue: JobQueue | None = None
 
     def close(self) -> None:
@@ -201,6 +212,36 @@ def build_container(
         oauth=oauth_service,
         audit=audit_service,
     )
+    auxiliary_cache = AuxiliaryCache(redis_mgr.client)
+    search_source_db = db
+    if cfg.search_source_mongodb_uri.strip() and mongo_client is None:
+        ro_client: MongoClient[Any] = MongoClient(
+            cfg.search_source_mongodb_uri.strip(),
+            maxPoolSize=max(2, min(cfg.mongodb_max_pool_size, 10)),
+            serverSelectionTimeoutMS=cfg.mongodb_server_selection_timeout_ms,
+            tz_aware=True,
+        )
+        search_source_db = ro_client[cfg.mongodb_db]
+    collection_counts = CollectionCountService(
+        settings=cfg,
+        source_db=search_source_db,
+        collections=collection_service,
+        cache=auxiliary_cache,
+    )
+    search_backend = build_search_backend(cfg)
+    fulltext_search = FulltextSearchService(
+        settings=cfg,
+        source_db=search_source_db,
+        collections=collection_service,
+        backend=search_backend,
+        cache=auxiliary_cache,
+    )
+    search_indexer = SearchIndexer(
+        settings=cfg,
+        source_db=search_source_db,
+        backend=search_backend,
+        cache=auxiliary_cache,
+    )
 
     return Container(
         settings=cfg,
@@ -234,4 +275,9 @@ def build_container(
         job_queue=JobQueue(redis_mgr.client, jobs) if cfg.jobs_async else None,
         analytics=analytics,
         mcp_access=mcp_access,
+        auxiliary_cache=auxiliary_cache,
+        collection_counts=collection_counts,
+        search_backend=search_backend,
+        fulltext_search=fulltext_search,
+        search_indexer=search_indexer,
     )

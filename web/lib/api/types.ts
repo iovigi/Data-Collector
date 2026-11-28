@@ -74,7 +74,18 @@ export interface RecordItem {
   source?: Record<string, unknown>;
 }
 
-export type FilterOp = "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "exists" | "contains";
+export type FilterOp =
+  | "eq"
+  | "ne"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "in"
+  | "exists"
+  | "contains"
+  | "array_contains"
+  | "between";
 
 export type SafeFilterNode =
   | { and: SafeFilterNode[] }
@@ -298,4 +309,59 @@ export interface FieldsResponse {
   total_records: number;
   sampled_records: number;
   fields: FieldProfile[];
+}
+
+export interface CountBucket {
+  value: number | null;
+  accuracy: "exact_as_of" | "cached" | "indexed" | "pending" | "unavailable";
+  as_of: string | null;
+  age_seconds: number | null;
+  source: string;
+  reason?: string;
+}
+
+export interface CollectionCountResponse {
+  collection_id: string;
+  active: CountBucket;
+  trashed: CountBucket | null;
+  total: CountBucket | null;
+  status: "ready" | "pending" | "unavailable" | "accepted";
+  refresh_available?: boolean;
+}
+
+export interface BatchCollectionCountsResponse {
+  items: CollectionCountResponse[];
+}
+
+export interface SearchStatusResponse {
+  collection_id: string;
+  enabled: boolean;
+  backend: string;
+  ready: boolean;
+  state: string;
+  coverage: "none" | "partial" | "complete";
+  indexed_records: number;
+  as_of: string | null;
+  index_generation: string;
+  incremental_sync_supported: boolean;
+}
+
+export interface FulltextSearchHit {
+  record: RecordItem;
+  highlights: Array<{ path: string; text: string }>;
+  score: number;
+}
+
+export interface FulltextSearchResponse {
+  items: FulltextSearchHit[];
+  next_cursor: string | null;
+  has_more: boolean;
+  index_status: {
+    state: string;
+    coverage: string;
+    indexed_records: number;
+    as_of: string | null;
+    backend: string;
+  };
+  result_total: { value: number | null; accuracy: string };
 }

@@ -192,7 +192,7 @@ class RecordRepository:
             sort_spec = [("_id", sort_dir)]
 
         cur = self._col.find(query, projection).sort(sort_spec).limit(limit)
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(TypeError, NotImplementedError):
             cur = cur.max_time_ms(max_time_ms)
         return [s for d in cur if (s := serialize_doc(d)) is not None]
 

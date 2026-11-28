@@ -14,6 +14,7 @@ from data_collector.domain.exceptions import (
     ConflictError,
     NotFoundError,
     PayloadTooLargeError,
+    QueryNotIndexedError,
     ValidationError,
 )
 from data_collector.domain.identities import Actor, Scope
@@ -32,6 +33,7 @@ from data_collector.services.query_dsl import (
     query_signature,
     validate_field_name,
 )
+from data_collector.services.search_planner import plan_search
 
 _RESERVED_DATA_KEYS = frozenset(
     {"_id", "workspace_id", "project_id", "collection_id", "created_at", "created_by"}
@@ -334,6 +336,7 @@ class RecordService:
 
         page_size = min(
             limit or self._settings.default_query_page_size,
+            self._settings.structured_search_max_page_size,
             self._settings.max_query_page_size,
         )
         if page_size < 1:
@@ -363,6 +366,18 @@ class RecordService:
         sort_dir = 1 if sort_dir_str == "asc" else -1
 
         mongo_filter = compile_filter(filter_ast, allowed_fields=allowed)
+        plan = plan_search(
+            actor,
+            col,
+            filter_ast,
+            sort,
+            fields,
+            settings=self._settings,
+        )
+        if plan.mode == "rejected":
+            raise QueryNotIndexedError(
+                plan.refusal_reason or "Query is not backed by an approved source index"
+            )
         projection = compile_projection(fields, allowed_fields=allowed)
         sig = query_signature(ws_id, collection_id, filter_ast, mongo_sort_field, sort_dir_str)
 
@@ -386,7 +401,10 @@ class RecordService:
             limit=page_size + 1,
             cursor_filter=cursor_filter,
             projection=projection,
-            max_time_ms=self._settings.max_query_time_ms,
+            max_time_ms=min(
+                self._settings.max_query_time_ms,
+                self._settings.structured_search_max_time_ms,
+            ),
         )
 
         has_more = len(rows) > page_size

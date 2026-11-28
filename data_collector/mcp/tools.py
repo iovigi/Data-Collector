@@ -513,6 +513,44 @@ def build_mcp_server(
 
         return _run("dc_run_saved_query", _exec)
 
+    @mcp.tool()
+    def dc_get_collection_count(
+        collection_id: str,
+        include_trash: bool = False,
+    ) -> dict[str, Any]:
+        """Return cache-first, freshness-labeled record count for a collection (read-only)."""
+
+        def _exec() -> dict[str, Any]:
+            actor = get_mcp_actor()
+            return container.collection_counts.get_collection_count(
+                actor, collection_id, include_trash=include_trash, refresh=False
+            )
+
+        return _run("dc_get_collection_count", _exec, collection_id=collection_id)
+
+    @mcp.tool()
+    def dc_fulltext_search(
+        collection_id: str,
+        query: str,
+        fields: list[str] | None = None,
+        limit: int = 25,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Execute bounded external full-text search with source rehydration (read-only)."""
+
+        def _exec() -> dict[str, Any]:
+            actor = get_mcp_actor()
+            return container.fulltext_search.search(
+                actor,
+                collection_id,
+                query=query,
+                fields=fields,
+                limit=min(max(1, limit), 50),
+                cursor=cursor,
+            )
+
+        return _run("dc_fulltext_search", _exec, collection_id=collection_id)
+
     # MCP Resources
     @mcp.resource("dc://workspaces/{wid}/projects/{pid}/collections")
     def resource_collections(wid: str, pid: str) -> str:
