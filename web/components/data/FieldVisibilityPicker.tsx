@@ -79,7 +79,7 @@ export function FieldVisibilityPicker({
         Columns ({visibleColumns.length})
       </Button>
       {open && (
-        <div className="absolute right-0 z-30 mt-1 max-h-72 w-60 sm:w-72 overflow-y-auto rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2.5 shadow-lg">
+        <div className="absolute left-0 z-30 mt-1 max-h-72 w-60 sm:right-0 sm:left-auto sm:w-72 overflow-y-auto rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2.5 shadow-lg">
           <div className="mb-2 flex items-center justify-between text-xs font-semibold">
             <span>Visible columns</span>
             <button

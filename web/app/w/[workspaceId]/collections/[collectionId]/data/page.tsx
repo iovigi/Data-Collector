@@ -946,7 +946,7 @@ function DataExplorer({ wid, cid }: { wid: string; cid: string }) {
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <div className="w-full min-w-0 text-sm font-medium sm:w-auto sm:flex-1" aria-live="polite">
           {isFulltext
-            ? fulltextQueryText && <span className="break-words">Results for “{fulltextQueryText}”</span>
+            ? fulltextQueryText && <span className="break-words">Results for <strong>{fulltextQueryText}</strong></span>
             : tab === "trash" ? "Deleted records" : "Records"}
         </div>
         <FieldVisibilityPicker
