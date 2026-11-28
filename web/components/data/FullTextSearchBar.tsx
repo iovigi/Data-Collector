@@ -1,96 +1,99 @@
-import React, { useState } from "react";
-import { Search, X } from "lucide-react";
-import type { SearchStatusResponse } from "@/lib/api/types";
+import React from "react";
+import { RefreshCw, Search, X } from "lucide-react";
+import type { FulltextSearchResponse, SearchStatusResponse } from "@/lib/api/types";
 import { Badge, Button, Input } from "@/components/ui/primitives";
-
-export function IndexStatusBadge({ status }: { status?: SearchStatusResponse }) {
-  if (!status) return null;
-  if (!status.enabled || !status.ready) {
-    return (
-      <span title="External full-text search is disabled by operator config">
-        <Badge tone="neutral">
-          Full-text: {status.enabled ? status.state : "disabled"}
-        </Badge>
-      </span>
-    );
-  }
-  const tone = status.coverage === "complete" ? "success" : "warning";
-  return (
-    <span
-      title={`Backend: ${status.backend}, indexed: ${status.indexed_records.toLocaleString()}, as of ${status.as_of ?? "n/a"}`}
-    >
-      <Badge tone={tone}>
-        Full-text: {status.coverage} ({status.indexed_records.toLocaleString()} indexed)
-      </Badge>
-    </span>
-  );
-}
 
 interface FullTextSearchBarProps {
   status?: SearchStatusResponse;
+  resultStatus?: FulltextSearchResponse["index_status"];
+  statusLoading: boolean;
+  statusError: boolean;
+  onRefreshStatus: () => void;
+  text: string;
+  onTextChange: (text: string) => void;
   onSearch: (query: string) => void;
   onClear: () => void;
-  isSearching?: boolean;
+  isSearching: boolean;
 }
 
 export function FullTextSearchBar({
   status,
+  resultStatus,
+  statusLoading,
+  statusError,
+  onRefreshStatus,
+  text,
+  onTextChange,
   onSearch,
   onClear,
-  isSearching = false,
+  isSearching,
 }: FullTextSearchBarProps) {
-  const [text, setText] = useState("");
-  const ready = Boolean(status?.enabled && status?.ready);
-
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!ready || !text.trim()) return;
-    onSearch(text.trim());
-  };
+  const ready = status?.ready === true;
+  const coverage = resultStatus ?? status;
+  const partial = coverage?.coverage === "partial";
+  const statusText = statusLoading
+    ? "Checking search availability…"
+    : statusError
+      ? "Search status could not be loaded."
+      : !status?.enabled
+        ? "Full-text search is disabled for this deployment."
+        : status.state === "not_indexed"
+          ? "This collection is waiting for its first indexing run."
+          : "The search index is temporarily unavailable.";
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs text-[hsl(var(--muted-foreground))]">
-          External full-text search (isolated index, no MongoDB collection scans)
-        </div>
-        <IndexStatusBadge status={status} />
-      </div>
-      {!ready ? (
-        <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-3 py-2 text-xs text-[hsl(var(--muted-foreground))]">
-          External full-text search is currently disabled or not yet indexed for this collection.
-          Use <strong>Structured Filters</strong> for index-backed queries.
-        </div>
-      ) : (
-        <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+    <div className="space-y-3">
+      {ready && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (text.trim() && !isSearching) onSearch(text.trim());
+          }}
+          className="flex flex-wrap items-center gap-2"
+        >
           <Input
+            type="search"
             value={text}
             maxLength={256}
-            onChange={(e) => setText(e.target.value)}
-            placeholder='Search text across nested fields (e.g. "payment failed")'
+            onChange={(e) => onTextChange(e.target.value)}
+            placeholder={'Search text or an exact phrase like "payment failed"'}
             aria-label="Full-text search query"
-            className="min-w-[260px] flex-1"
+            className="min-w-0 basis-full sm:flex-1"
           />
-          <Button size="sm" type="submit" disabled={isSearching || !text.trim()}>
-            <Search className="h-3.5 w-3.5" />
-            {isSearching ? "Searching..." : "Full-text Search"}
+          <Button type="submit" disabled={isSearching || !text.trim()}>
+            <Search className="h-3.5 w-3.5" aria-hidden="true" />
+            {isSearching ? "Searching…" : "Search"}
           </Button>
           {text && (
-            <Button
-              size="sm"
-              variant="secondary"
-              type="button"
-              onClick={() => {
-                setText("");
-                onClear();
-              }}
-            >
-              <X className="h-3.5 w-3.5" />
+            <Button variant="ghost" type="button" onClick={onClear}>
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
               Clear
             </Button>
           )}
         </form>
       )}
+      <div className="flex flex-wrap items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
+        <div className="flex flex-1 flex-wrap items-center gap-x-2 gap-y-1" role="status">
+          {ready && coverage ? (
+            <>
+              <Badge tone={partial ? "warning" : "neutral"}>
+                {partial ? "Partial index" : "Indexed snapshot"}
+              </Badge>
+              <span>{coverage.indexed_records.toLocaleString()} records indexed</span>
+              {coverage.as_of && <span>Updated {new Date(coverage.as_of).toLocaleString()}</span>}
+              {!status?.incremental_sync_supported && <span>Refreshed by manual indexing</span>}
+            </>
+          ) : (
+            <span>{statusText} {!statusLoading && "Structured Filters are available."}</span>
+          )}
+        </div>
+        {!statusLoading && (
+          <Button size="sm" variant="ghost" type="button" onClick={onRefreshStatus}>
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+            Refresh status
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

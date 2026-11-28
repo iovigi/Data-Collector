@@ -2,15 +2,16 @@ import React from "react";
 import { Badge } from "@/components/ui/primitives";
 
 export function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  if (!path.includes(".")) return obj[path];
   let cur: unknown = obj;
-  for (const part of path.split(".")) {
-    if (cur === null || cur === undefined || typeof cur !== "object" || Array.isArray(cur)) {
+  const parts = path.match(/(?:\\.|[^.\\])+/g) ?? [];
+  for (const part of parts) {
+    const key = part.replace(/\\([\\.])/g, "$1");
+    if (!cur || typeof cur !== "object" || Array.isArray(cur) || !Object.hasOwn(cur, key)) {
       return undefined;
     }
-    cur = (cur as Record<string, unknown>)[part];
+    cur = (cur as Record<string, unknown>)[key];
   }
-  return cur;
+  return parts.length ? cur : undefined;
 }
 
 export function NestedValuePreview({ value }: { value: unknown }) {

@@ -9,6 +9,9 @@ interface CountBadgeProps {
   onRefresh?: () => void;
   refreshing?: boolean;
   compact?: boolean;
+  loading?: boolean;
+  unavailable?: boolean;
+  onDemand?: boolean;
 }
 
 function formatAge(ageSeconds: number | null | undefined): string {
@@ -24,7 +27,19 @@ export function CountBadge({
   onRefresh,
   refreshing = false,
   compact = false,
+  loading = false,
+  unavailable = false,
+  onDemand = false,
 }: CountBadgeProps) {
+  if (loading && !bucket) {
+    return <Badge>{compact ? "Loading count…" : `${label}: Loading…`}</Badge>;
+  }
+  if (unavailable && !bucket) {
+    bucket = { value: null, accuracy: "unavailable", as_of: null, age_seconds: null, source: "planner" };
+  }
+  if (onDemand && (!bucket || bucket.accuracy === "pending")) {
+    return <span title="Open Data Explorer to load the record count"><Badge>Count on request</Badge></span>;
+  }
   if (!bucket || bucket.accuracy === "pending") {
     return (
       <span

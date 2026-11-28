@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { RecordItem } from "@/lib/api/types";
 import { Badge, Button, CopyButton, Input } from "@/components/ui/primitives";
 import { JsonTree } from "./JsonTree";
 
 interface RecordDetailDrawerProps {
-  record: RecordItem | null;
+  record: RecordItem;
   onClose: () => void;
   canEdit?: boolean;
   onEdit?: (record: RecordItem) => void;
@@ -23,28 +23,30 @@ export function RecordDetailDrawer({
   const [treeSearch, setTreeSearch] = useState("");
   const [formatNumbers, setFormatNumbers] = useState(false);
 
+  const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    if (!record) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [record, onClose]);
-
-  if (!record) return null;
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
 
   const rawJson = JSON.stringify(record.data, null, 2);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/40"
-      role="dialog"
-      aria-modal="true"
+    <dialog
+      ref={dialogRef}
+      className="fixed inset-y-0 right-0 left-auto m-0 h-dvh max-h-dvh w-full max-w-2xl border-l border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))] shadow-xl backdrop:bg-black/40"
       aria-label={`Inspect record ${record.id}`}
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
-      <div className="flex h-full w-full max-w-2xl flex-col border-l border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-xl">
-        <div className="flex items-center justify-between border-b border-[hsl(var(--border))] px-4 py-3">
+      <div className="flex h-full min-w-0 flex-col">
+        <div className="flex items-center justify-between gap-2 border-b border-[hsl(var(--border))] px-4 py-3">
           <div>
             <div className="flex items-center gap-2">
               <span className="font-semibold">Record Inspector</span>
@@ -57,7 +59,7 @@ export function RecordDetailDrawer({
           <div className="flex items-center gap-2">
             {canEdit && onEdit && (
               <Button size="sm" variant="secondary" onClick={() => onEdit(record)}>
-                Edit JSON
+                Edit record
               </Button>
             )}
             <Button size="sm" variant="ghost" aria-label="Close inspector" onClick={onClose}>
@@ -66,7 +68,7 @@ export function RecordDetailDrawer({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-4 py-2.5 text-xs">
+        <div className="grid gap-2 break-all sm:grid-cols-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-4 py-2.5 text-xs">
           <div>
             <span className="text-[hsl(var(--muted-foreground))]">Created: </span>
             <span className="font-mono">{record.created_at}</span>
@@ -90,6 +92,7 @@ export function RecordDetailDrawer({
             <Button
               size="sm"
               variant={viewMode === "tree" ? "primary" : "secondary"}
+              aria-pressed={viewMode === "tree"}
               onClick={() => setViewMode("tree")}
             >
               Tree View
@@ -97,12 +100,13 @@ export function RecordDetailDrawer({
             <Button
               size="sm"
               variant={viewMode === "raw" ? "primary" : "secondary"}
+              aria-pressed={viewMode === "raw"}
               onClick={() => setViewMode("raw")}
             >
               Raw JSON
             </Button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {viewMode === "tree" && (
               <>
                 <Input
@@ -118,7 +122,7 @@ export function RecordDetailDrawer({
                     checked={formatNumbers}
                     onChange={(e) => setFormatNumbers(e.target.checked)}
                   />
-                  Locale nums
+                  Format numbers
                 </label>
               </>
             )}
@@ -143,6 +147,6 @@ export function RecordDetailDrawer({
           )}
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

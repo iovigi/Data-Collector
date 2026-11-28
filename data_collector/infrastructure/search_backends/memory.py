@@ -75,7 +75,7 @@ class InMemorySearchBackend:
         with self._lock:
             docs = list(self._indexes.get(index_name, {}).values())
 
-        scored: list[tuple[float, str, list[dict[str, str]]]] = []
+        scored: list[SearchHit] = []
         for doc in docs:
             if (
                 doc.get("workspace_id") != workspace_id
@@ -87,18 +87,7 @@ class InMemorySearchBackend:
                 continue
 
             text_fields: dict[str, str] = doc.get("text_fields") or {}
-            candidate_paths = (
-                [
-                    p
-                    for p in text_fields
-                    if any(
-                        p == f or p.startswith(f"{f}.") or p.startswith(f"{f}[]")
-                        for f in fields
-                    )
-                ]
-                if fields
-                else list(text_fields.keys())
-            )
+            candidate_paths = [path for path in text_fields if not fields or path in fields]
             if not candidate_paths:
                 continue
 
@@ -128,25 +117,32 @@ class InMemorySearchBackend:
 
             if len(phrases) > 0 and matched_phrases < len(phrases):
                 continue
-            if len(tokens) > 0 and matched_tokens == 0 and matched_phrases == 0:
+            if matched_tokens < len(tokens):
                 continue
             if not phrases and not tokens:
                 continue
-            scored.append((score, str(doc["source_id"]), highlights))
+            scored.append(
+                SearchHit(
+                    source_id=str(doc["source_id"]),
+                    score=score,
+                    highlights=highlights,
+                    source_version=doc.get("indexed_source_version"),
+                )
+            )
 
         if sort == "created_at_asc":
-            scored.sort(key=lambda item: item[1])
+            scored.sort(key=lambda item: item.source_id)
         elif sort == "created_at_desc":
-            scored.sort(key=lambda item: item[1], reverse=True)
+            scored.sort(key=lambda item: item.source_id, reverse=True)
         else:
-            scored.sort(key=lambda item: (-item[0], item[1]))
+            scored.sort(key=lambda item: (-item.score, item.source_id))
 
         offset = int(cursor) if cursor and cursor.isdigit() else 0
         page = scored[offset : offset + limit]
         has_more = offset + limit < len(scored)
         next_cursor = str(offset + limit) if has_more else None
         return SearchQueryResult(
-            hits=[SearchHit(source_id=sid, score=sc, highlights=hl) for sc, sid, hl in page],
+            hits=page,
             next_cursor=next_cursor,
             has_more=has_more,
             total_estimated=len(scored),

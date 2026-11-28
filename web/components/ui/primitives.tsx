@@ -259,7 +259,7 @@ export function Modal({
         if (e.key === "Escape") onClose();
       }}
     >
-      <div className="w-full max-w-lg rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-elevated))] p-6 shadow-xl">
+      <div className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-elevated))] p-6 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button

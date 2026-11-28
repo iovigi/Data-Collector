@@ -28,8 +28,12 @@ SEARCH_SOURCE_MONGODB_URI=mongodb://dc_search_ro:<password>@<host>:27017/data_co
 
 ## 3. External Search Engine (Optional Self-Hosted Meilisearch)
 - Run Meilisearch bound to `127.0.0.1:7700` (never expose publicly through IIS).
-- Set `FULLTEXT_SEARCH_ENABLED=true`, `FULLTEXT_SEARCH_BACKEND=meilisearch`, `FULLTEXT_SEARCH_URL=http://127.0.0.1:7700`, and `FULLTEXT_SEARCH_API_KEY=<master-key>`.
+- Configure `FULLTEXT_SEARCH_BACKEND=meilisearch`, `FULLTEXT_SEARCH_URL=http://127.0.0.1:7700` and `FULLTEXT_SEARCH_API_KEY`. The indexer key needs index, settings, document and task access. The API can use a separate search key restricted to the external index.
+- Provision persistent Redis for indexing checkpoints. Keep `FULLTEXT_SEARCH_ENABLED=false` until a manual pilot backfill succeeds. Enable `SEARCH_BACKFILL_ENABLED` for the indexer process.
+- The updated indexer restricts Meilisearch searchable attributes to record text. The first run against an older external index can rebuild that index's internal search data. Use the dedicated external engine and allow time for its indexing task to finish before retrying.
+- Use a new external namespace if the external index or its retained Redis checkpoints have been lost. Backfill the new namespace before configuring the API to read from it.
 - Minimum recommended resources for millions of records: 4+ GB RAM dedicated to Meilisearch and SSD storage >= 2x raw text size.
 
 ## 4. Incremental Sync Limitation
-- `incremental_sync_supported` is explicitly reported as `false` until replica-set change streams are provisioned; re-run `dc-search-indexer backfill` on a schedule or after bulk ingestion.
+- Incremental updates are currently unavailable. A standard backfill resumes from the last indexed ID and covers later IDs. Reindex older edited records with a manually planned bounded backfill using `--reset` on the first invocation and normal resume on subsequent invocations.
+- Full-text serves an indexed snapshot. Records with a newer source version and records in Trash are excluded during hydration. Search terms added by an edit become searchable after that record is indexed again.

@@ -13,30 +13,31 @@ export function discoverRecordPaths(
 ): Array<{ path: string; source: "schema" | "sampled" }> {
   const seen = new Map<string, "schema" | "sampled">();
 
-  const walk = (obj: unknown, prefix: string, depth: number, source: "schema" | "sampled") => {
-    if (seen.size >= MAX_DISCOVERED_PATHS || depth > MAX_SAMPLE_DEPTH) return;
-    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
-    for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+  function walk(
+    properties: Record<string, unknown>,
+    prefix: string,
+    depth: number,
+    source: "schema" | "sampled"
+  ) {
+    if (depth > MAX_SAMPLE_DEPTH) return;
+    for (const [key, value] of Object.entries(properties)) {
       if (seen.size >= MAX_DISCOVERED_PATHS) break;
-      const p = prefix ? `${prefix}.${key}` : key;
-      if (!seen.has(p)) seen.set(p, source);
-      if (val && typeof val === "object" && !Array.isArray(val)) {
-        walk(val, p, depth + 1, source);
+      const segment = key.replaceAll("\\", "\\\\").replaceAll(".", "\\.");
+      const path = prefix ? `${prefix}.${segment}` : segment;
+      if (!seen.has(path)) seen.set(path, source);
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const object = value as Record<string, unknown>;
+      if (source === "sampled") {
+        walk(object, path, depth + 1, source);
+      } else if (object.properties && typeof object.properties === "object" && !Array.isArray(object.properties)) {
+        walk(object.properties as Record<string, unknown>, path, depth + 1, source);
       }
-    }
-  };
-
-  for (const key of Object.keys(schemaProperties)) {
-    if (seen.size >= MAX_DISCOVERED_PATHS) break;
-    seen.set(key, "schema");
-    const prop = schemaProperties[key] as { properties?: Record<string, unknown> } | undefined;
-    if (prop?.properties) {
-      walk(prop.properties, key, 2, "schema");
     }
   }
 
-  for (const rec of records.slice(0, MAX_SAMPLED_DOCS)) {
-    walk(rec.data, "", 1, "sampled");
+  walk(schemaProperties, "", 1, "schema");
+  for (const record of records.slice(0, MAX_SAMPLED_DOCS)) {
+    walk(record.data, "", 1, "sampled");
   }
 
   return Array.from(seen.entries()).map(([path, source]) => ({ path, source }));
@@ -56,6 +57,12 @@ export function FieldVisibilityPicker({
   const [open, setOpen] = useState(false);
 
   const selectedSet = useMemo(() => new Set(visibleColumns), [visibleColumns]);
+  const choices = [
+    ...availablePaths,
+    ...visibleColumns
+      .filter((path) => !availablePaths.some((item) => item.path === path))
+      .map((path) => ({ path, source: "selected" })),
+  ];
 
   const toggle = (path: string) => {
     if (selectedSet.has(path)) {
@@ -67,14 +74,14 @@ export function FieldVisibilityPicker({
 
   return (
     <div className="relative">
-      <Button size="sm" variant="secondary" onClick={() => setOpen((v) => !v)}>
+      <Button size="sm" variant="secondary" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <Columns className="h-3.5 w-3.5" />
         Columns ({visibleColumns.length})
       </Button>
       {open && (
-        <div className="absolute right-0 z-30 mt-1 max-h-72 w-72 overflow-y-auto rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2.5 shadow-lg">
+        <div className="absolute right-0 z-30 mt-1 max-h-72 w-60 sm:w-72 overflow-y-auto rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2.5 shadow-lg">
           <div className="mb-2 flex items-center justify-between text-xs font-semibold">
-            <span>Visible Columns (local)</span>
+            <span>Visible columns</span>
             <button
               type="button"
               className="text-[hsl(var(--primary))] underline"
@@ -83,11 +90,11 @@ export function FieldVisibilityPicker({
               Done
             </button>
           </div>
-          {availablePaths.length === 0 ? (
+          {choices.length === 0 ? (
             <div className="text-xs text-[hsl(var(--muted-foreground))]">No fields discovered</div>
           ) : (
             <div className="space-y-1">
-              {availablePaths.map(({ path, source }) => (
+              {choices.map(({ path, source }) => (
                 <label
                   key={path}
                   className="flex cursor-pointer items-center justify-between gap-2 rounded px-1.5 py-1 text-xs hover:bg-[hsl(var(--muted))]/40"

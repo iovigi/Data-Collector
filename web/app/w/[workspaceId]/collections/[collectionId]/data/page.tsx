@@ -7,13 +7,14 @@ import {
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { Download, Plus, RefreshCw, RotateCcw, Trash2, Upload } from "lucide-react";
+import { ChevronDown, Download, Eye, Pencil, Plus, RefreshCw, RotateCcw, Trash2, Upload } from "lucide-react";
 import { apiFetch } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
 import type {
   Collection,
   CollectionCountResponse,
   FilterOp,
+  FulltextSearchHit,
   FulltextSearchResponse,
   JobItem,
   RecordItem,
@@ -32,7 +33,6 @@ import { NestedValuePreview, getNestedValue } from "@/components/data/NestedValu
 import { RecordDetailDrawer } from "@/components/data/RecordDetailDrawer";
 import { useToast } from "@/components/providers";
 import {
-  Badge,
   Button,
   Card,
   ConfirmDialog,
@@ -87,7 +87,7 @@ function coerceValue(raw: string, type: FieldType): unknown {
   switch (type) {
     case "number": {
       const n = Number(v);
-      return v !== "" && !Number.isNaN(n) ? n : v;
+      return v !== "" && Number.isFinite(n) ? n : v;
     }
     case "boolean":
       return v.toLowerCase() === "true" ? true : v.toLowerCase() === "false" ? false : v;
@@ -102,7 +102,7 @@ function coerceValue(raw: string, type: FieldType): unknown {
       if (v === "true") return true;
       if (v === "false") return false;
       const n = Number(v);
-      return v !== "" && !Number.isNaN(n) ? n : raw;
+      return v !== "" && Number.isFinite(n) ? n : raw;
     }
   }
 }
@@ -154,11 +154,39 @@ function toLocalInput(iso: string): string {
   return new Date(d.getTime() - off).toISOString().slice(0, 16);
 }
 
+function SearchMatch({ hit }: { hit?: FulltextSearchHit }) {
+  return (
+    <div className="min-w-36 space-y-1 text-xs">
+      {hit?.highlights.slice(0, 2).map(({ path, text }) => (
+        <div key={path}>
+          <div className="break-all font-medium text-[hsl(var(--muted-foreground))]">{path}</div>
+          <div className="line-clamp-3 break-words">{decodeSnippet(text)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function decodeSnippet(text: string) {
+  const escapes: Record<string, string> = {
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#x27;": "'",
+  };
+  return text.replace(/&(?:amp|lt|gt|quot|#x27);/g, (entity) => escapes[entity]!);
+}
+
 export default function DataExplorerPage() {
   const { workspaceId: wid, collectionId: cid } = useParams<{
     workspaceId: string;
     collectionId: string;
   }>();
+  return <DataExplorer key={`${wid}:${cid}`} wid={wid} cid={cid} />;
+}
+
+function DataExplorer({ wid, cid }: { wid: string; cid: string }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -173,7 +201,11 @@ export default function DataExplorerPage() {
   const [tab, setTab] = useState<"active" | "trash">("active");
   const [searchMode, setSearchMode] = useState<"structured" | "fulltext">("structured");
   const [fulltextQueryText, setFulltextQueryText] = useState<string | null>(null);
-  const [fulltextCursor, setFulltextCursor] = useState<string | null>(null);
+  const [fulltextDraft, setFulltextDraft] = useState("");
+  const [fulltextCursorStack, setFulltextCursorStack] = useState<Array<string | null>>([null]);
+  const fulltextCursor = fulltextCursorStack.at(-1) ?? null;
+  const isFulltext = tab === "active" && searchMode === "fulltext";
+  const [filterError, setFilterError] = useState<string | null>(null);
   const [inspectedRecord, setInspectedRecord] = useState<RecordItem | null>(null);
   const [customColumns, setCustomColumns] = useState<string[] | null>(() => {
     if (typeof window === "undefined") return null;
@@ -192,10 +224,12 @@ export default function DataExplorerPage() {
   const [newJson, setNewJson] = useState('{\n  "name": ""\n}');
   const [editingRecord, setEditingRecord] = useState<RecordItem | null>(null);
   const [editJson, setEditJson] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
   const [conflictRecord, setConflictRecord] = useState<RecordItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RecordItem | null>(null);
 
   // Import/Export/SaveQuery modals
+  const [showActions, setShowActions] = useState(false);
   const [openImport, setOpenImport] = useState(false);
   const [openDeleteCollection, setOpenDeleteCollection] = useState(false);
   const router = useRouter();
@@ -229,7 +263,12 @@ export default function DataExplorerPage() {
       }),
     onSuccess: (data) => {
       queryClient.setQueryData(["collection-count", wid, cid], data);
-      toast({ title: "Record count refreshed", variant: "success" });
+      queryClient.invalidateQueries({ queryKey: ["collection-counts-batch", wid] });
+      const available = data.active.value !== null;
+      toast({
+        title: available ? "Record count refreshed" : "Record count is unavailable",
+        variant: available ? "success" : "default",
+      });
     },
     onError: (err: Error) =>
       toast({ title: "Count refresh failed", description: err.message, variant: "error" }),
@@ -238,12 +277,15 @@ export default function DataExplorerPage() {
   const searchStatusQuery = useQuery({
     queryKey: ["search-status", wid, cid],
     queryFn: () => apiFetch<SearchStatusResponse>(`/collections/${cid}/search/status`),
+    enabled: isFulltext,
     staleTime: 30_000,
+    retry: false,
+    refetchInterval: (query) => query.state.data?.state === "indexing" ? 10_000 : false,
   });
 
   const fulltextQuery = useQuery({
     queryKey: ["records-fulltext", wid, cid, fulltextQueryText, fulltextCursor],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiFetch<FulltextSearchResponse>(`/collections/${cid}/records/fulltext`, {
         method: "POST",
         body: {
@@ -251,9 +293,10 @@ export default function DataExplorerPage() {
           limit: PAGE_SIZE,
           cursor: fulltextCursor,
         },
+        signal,
       }),
-    enabled: tab === "active" && searchMode === "fulltext" && Boolean(fulltextQueryText),
-    placeholderData: keepPreviousData,
+    enabled: isFulltext && Boolean(fulltextQueryText),
+    retry: false,
   });
 
   const searchQuery = useQuery({
@@ -268,7 +311,7 @@ export default function DataExplorerPage() {
           cursor: currentCursor,
         },
       }),
-    enabled: tab === "active",
+    enabled: tab === "active" && searchMode === "structured",
     placeholderData: keepPreviousData,
   });
 
@@ -294,6 +337,7 @@ export default function DataExplorerPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["records", wid, cid] });
+      queryClient.invalidateQueries({ queryKey: ["records-fulltext", wid, cid] });
       setOpenCreate(false);
       toast({ title: "Record created", variant: "success" });
     },
@@ -304,7 +348,26 @@ export default function DataExplorerPage() {
   const updateMutation = useMutation({
     mutationFn: () => {
       if (!editingRecord) throw new Error("No record selected");
-      const patch = JSON.parse(editJson) as Record<string, unknown>;
+      const next: unknown = JSON.parse(editJson);
+      if (!next || typeof next !== "object" || Array.isArray(next)) {
+        throw new Error("Enter a JSON object.");
+      }
+      const previous = editingRecord.data;
+      const patch = Object.fromEntries(Object.entries(next).filter(([key, value]) => {
+        if (Object.hasOwn(previous, key) && JSON.stringify(previous[key]) === JSON.stringify(value)) {
+          return false;
+        }
+        if (value === null) {
+          throw new Error(`The API uses null to remove a top-level field. Remove the key “${key}” to delete it.`);
+        }
+        return true;
+      }));
+      for (const key of Object.keys(previous)) {
+        if (!Object.hasOwn(next, key)) {
+          Object.defineProperty(patch, key, { value: null, enumerable: true });
+        }
+      }
+      if (Object.keys(patch).length === 0) throw new Error("Make a change before saving.");
       return apiFetch<RecordItem>(`/collections/${cid}/records/${editingRecord.id}`, {
         method: "PATCH",
         body: { patch, expected_version: editingRecord.version },
@@ -312,24 +375,21 @@ export default function DataExplorerPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["records", wid, cid] });
+      queryClient.invalidateQueries({ queryKey: ["records-fulltext", wid, cid] });
       setEditingRecord(null);
       toast({ title: "Record updated", variant: "success" });
     },
     onError: async (err: unknown) => {
       if (err instanceof ApiError && err.status === 409 && editingRecord) {
-        const fresh = await apiFetch<RecordItem>(`/collections/${cid}/records/${editingRecord.id}`);
-        setConflictRecord(fresh);
-        toast({
-          title: "Version conflict (409)",
-          description: "Record was modified by another user. Review server version below.",
-          variant: "error",
-        });
+        try {
+          const fresh = await apiFetch<RecordItem>(`/collections/${cid}/records/${editingRecord.id}`);
+          setConflictRecord(fresh);
+          setEditError("Another change was saved first. Review the latest version below.");
+        } catch {
+          setEditError("The record changed and the latest version could not be loaded.");
+        }
       } else {
-        toast({
-          title: "Update failed",
-          description: err instanceof Error ? err.message : "Error",
-          variant: "error",
-        });
+        setEditError(err instanceof Error ? err.message : "Could not save the record.");
       }
     },
   });
@@ -342,6 +402,7 @@ export default function DataExplorerPage() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["records", wid, cid] });
+      queryClient.invalidateQueries({ queryKey: ["records-fulltext", wid, cid] });
       queryClient.invalidateQueries({ queryKey: ["records-trash", wid, cid] });
       setDeleteTarget(null);
       toast({ title: "Record moved to trash", variant: "success" });
@@ -355,6 +416,7 @@ export default function DataExplorerPage() {
       apiFetch<RecordItem>(`/collections/${cid}/records/${rid}/restore`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["records", wid, cid] });
+      queryClient.invalidateQueries({ queryKey: ["records-fulltext", wid, cid] });
       queryClient.invalidateQueries({ queryKey: ["records-trash", wid, cid] });
       toast({ title: "Record restored", variant: "success" });
     },
@@ -392,6 +454,7 @@ export default function DataExplorerPage() {
       );
       setImportJob(job);
       queryClient.invalidateQueries({ queryKey: ["records", wid, cid] });
+      queryClient.invalidateQueries({ queryKey: ["records-fulltext", wid, cid] });
       toast({ title: `Import ${job.state}`, variant: "success" });
     } catch (err) {
       toast({
@@ -423,22 +486,46 @@ export default function DataExplorerPage() {
         ?.properties ?? {},
     [colQuery.data]
   );
-  const schemaProps = useMemo(() => Object.keys(schemaPropDefs), [schemaPropDefs]);
+  const schemaPaths = useMemo(
+    () => discoverRecordPaths(schemaPropDefs, []).map(({ path }) => path),
+    [schemaPropDefs]
+  );
 
   // Same allowlist the backend enforces: schema properties ∪ searchable_fields,
   // plus the built-in timestamp metadata fields.
   const searchableFields = useMemo(() => {
     const fields = new Set<string>([
       ...(colQuery.data?.searchable_fields ?? []),
-      ...schemaProps,
+      ...schemaPaths.filter((path) => /^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$/.test(path)),
     ]);
     return [...fields, ...[...DATE_FIELDS].filter((f) => !fields.has(f))];
-  }, [colQuery.data, schemaProps]);
+  }, [colQuery.data, schemaPaths]);
 
-  const fieldType = (field: string): FieldType =>
-    DATE_FIELDS.has(field) ? "datetime" : schemaFieldType(schemaPropDefs[field]);
+  const fieldType = (field: string): FieldType => {
+    if (DATE_FIELDS.has(field)) return "datetime";
+    let properties: Record<string, unknown> | undefined = schemaPropDefs;
+    let definition: unknown;
+    for (const part of field.split(".")) {
+      definition = properties?.[part];
+      properties = (definition as { properties?: Record<string, unknown> } | undefined)?.properties;
+    }
+    return schemaFieldType(definition);
+  };
 
   const applyFilters = () => {
+    const invalid = filterRows.findIndex((row) => {
+      if (!row.field || !row.value.trim()) return true;
+      if (row.op === "between") {
+        const [from, to] = row.value.split(",");
+        return !from?.trim() || !to?.trim();
+      }
+      return false;
+    });
+    if (invalid !== -1) {
+      setFilterError(`Complete condition ${invalid + 1} before applying filters.`);
+      return;
+    }
+    setFilterError(null);
     setAppliedFilter(buildAst(logic, filterRows, fieldType));
     setCursorStack([null]);
   };
@@ -448,20 +535,20 @@ export default function DataExplorerPage() {
 
   const caps = capsQuery.data?.features;
 
-  const currentQuery =
-    tab === "trash"
-      ? trashQuery
-      : searchMode === "fulltext" && fulltextQueryText
-        ? fulltextQuery
-        : searchQuery;
+  const currentQuery = tab === "trash" ? trashQuery : isFulltext ? fulltextQuery : searchQuery;
   const activeRows: RecordItem[] = useMemo(() => {
-    if (tab === "active" && searchMode === "fulltext" && fulltextQueryText) {
-      return (fulltextQuery.data?.items ?? []).map((h) => h.record);
-    }
-    return (
-      (tab === "trash" ? trashQuery.data?.items : searchQuery.data?.items) ?? []
-    );
-  }, [tab, searchMode, fulltextQueryText, fulltextQuery.data, trashQuery.data, searchQuery.data]);
+    if (isFulltext) return (fulltextQuery.data?.items ?? []).map((hit) => hit.record);
+    return (tab === "trash" ? trashQuery.data?.items : searchQuery.data?.items) ?? [];
+  }, [tab, isFulltext, fulltextQuery.data, trashQuery.data, searchQuery.data]);
+
+  const fulltextHits = useMemo(
+    () => new Map((fulltextQuery.data?.items ?? []).map((hit) => [hit.record.id, hit])),
+    [fulltextQuery.data]
+  );
+  const canEdit = tab === "active" && caps?.can_write_records === true;
+  const canExport = tab === "active" && !isFulltext && caps?.can_export;
+  const canImport = tab === "active" && caps?.can_create_jobs;
+  const canDeleteCollection = tab === "active" && caps?.can_delete_collections;
 
   const discoveredPaths = useMemo(
     () => discoverRecordPaths(schemaPropDefs, activeRows),
@@ -469,10 +556,9 @@ export default function DataExplorerPage() {
   );
 
   const visibleColumns = useMemo(() => {
-    if (customColumns && customColumns.length > 0) return customColumns;
-    if (schemaProps.length > 0) return schemaProps.slice(0, 6);
+    if (customColumns) return customColumns;
     return discoveredPaths.slice(0, 6).map((p) => p.path);
-  }, [customColumns, schemaProps, discoveredPaths]);
+  }, [customColumns, discoveredPaths]);
 
   const handleColumnsChange = (next: string[]) => {
     setCustomColumns(next);
@@ -485,6 +571,14 @@ export default function DataExplorerPage() {
     }
   };
 
+  function openEditor(record: RecordItem) {
+    setInspectedRecord(null);
+    setEditingRecord(record);
+    setEditJson(JSON.stringify(record.data, null, 2));
+    setEditError(null);
+    setConflictRecord(null);
+  }
+
   const columns = useMemo<ColumnDef<RecordItem>[]>(() => {
     const dataCols: ColumnDef<RecordItem>[] = visibleColumns.map((field) => ({
       id: `data.${field}`,
@@ -495,72 +589,77 @@ export default function DataExplorerPage() {
     }));
 
     return [
-      ...dataCols,
       {
-        id: "version",
-        header: "Ver",
-        cell: ({ row }) => <Badge>v{row.original.version}</Badge>,
-      },
-      {
-        id: "actions",
-        header: "Actions",
+        id: "record",
+        header: "Record",
         cell: ({ row }) => {
           const rec = row.original;
           return (
-            <div className="flex items-center gap-1.5">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setInspectedRecord(rec)}
-              >
-                Inspect
-              </Button>
-              {caps?.can_write_records && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setEditingRecord(rec);
-                    setEditJson(JSON.stringify(rec.data, null, 2));
-                    setConflictRecord(null);
-                  }}
-                >
-                  Edit
+            <div className="space-y-1">
+              <div className="flex items-center gap-1 whitespace-nowrap">
+                <Button size="sm" variant="secondary" onClick={() => setInspectedRecord(rec)}>
+                  <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                  View
                 </Button>
-              )}
-              {tab === "active" && caps?.can_delete_records && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Delete record ${rec.id}`}
-                  onClick={() => setDeleteTarget(rec)}
-                >
-                  <Trash2 className="h-3.5 w-3.5 text-[hsl(var(--destructive))]" />
-                </Button>
-              )}
-              {tab === "trash" && caps?.can_write_records && (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => restoreMutation.mutate(rec.id)}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Restore
-                </Button>
-              )}
+                {canEdit && (
+                  <Button size="sm" variant="secondary" onClick={() => openEditor(rec)}>
+                    <Pencil className="h-3 w-3" aria-hidden="true" />
+                    Edit
+                  </Button>
+                )}
+                {tab === "trash" && caps?.can_write_records && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={restoreMutation.isPending}
+                    onClick={() => restoreMutation.mutate(rec.id)}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Restore
+                  </Button>
+                )}
+              </div>
+              <div className="font-mono text-[11px] text-[hsl(var(--muted-foreground))]" title={rec.id}>
+                …{rec.id.slice(-8)} · v{rec.version}
+              </div>
             </div>
           );
         },
       },
+      ...(isFulltext ? [{
+        id: "match",
+        header: "Match",
+        cell: ({ row }: { row: { original: RecordItem } }) => (
+          <SearchMatch hit={fulltextHits.get(row.original.id)} />
+        ),
+      }] : []),
+      ...dataCols,
+      ...(tab === "active" && caps?.can_delete_records ? [{
+        id: "actions",
+        header: "Manage",
+        cell: ({ row }: { row: { original: RecordItem } }) => (
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={`Delete record ${row.original.id}`}
+            onClick={() => setDeleteTarget(row.original)}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-[hsl(var(--destructive))]" />
+          </Button>
+        ),
+      }] : []),
     ];
-  }, [visibleColumns, caps, tab, restoreMutation]);
+  }, [visibleColumns, canEdit, caps, tab, restoreMutation, isFulltext, fulltextHits]);
 
-  const pageStack = tab === "active" ? cursorStack : trashCursorStack;
-  const setPageStack = tab === "active" ? setCursorStack : setTrashCursorStack;
+  const pageStack = tab === "trash" ? trashCursorStack : isFulltext ? fulltextCursorStack : cursorStack;
+  const setPageStack = tab === "trash"
+    ? setTrashCursorStack
+    : isFulltext ? setFulltextCursorStack : setCursorStack;
 
   const table = useReactTable({
     data: activeRows,
     columns,
+    getRowId: (record) => record.id,
     getCoreRowModel: getCoreRowModel(),
   });
 
@@ -568,43 +667,16 @@ export default function DataExplorerPage() {
     <AppShell workspaceId={wid}>
       <PageHeader
         title={`Data Explorer · ${colQuery.data?.slug ?? "Collection"}`}
-        subtitle="Safe Query DSL filtering, cursor pagination, schema-validated editing & nested inspection"
         actions={
           <>
             <CountBadge
               bucket={countQuery.data?.active}
-              label="Active"
+              label="Active records"
+              loading={countQuery.isPending}
+              unavailable={countQuery.isError}
               onRefresh={() => refreshCountMutation.mutate()}
               refreshing={refreshCountMutation.isPending}
             />
-            <FieldVisibilityPicker
-              availablePaths={discoveredPaths}
-              visibleColumns={visibleColumns}
-              onChange={handleColumnsChange}
-            />
-            <Link href={`/w/${wid}/collections/${cid}/schema`}>
-              <Button size="sm" variant="secondary">
-                Schema (v{colQuery.data?.schema_version ?? 1})
-              </Button>
-            </Link>
-            {caps?.can_export && (
-              <Button size="sm" variant="secondary" onClick={() => exportMutation.mutate("csv")}>
-                <Download className="h-3.5 w-3.5" />
-                Export CSV
-              </Button>
-            )}
-            {caps?.can_create_jobs && (
-              <Button size="sm" variant="secondary" onClick={() => setOpenImport(true)}>
-                <Upload className="h-3.5 w-3.5" />
-                Import
-              </Button>
-            )}
-            {caps?.can_delete_collections && (
-              <Button size="sm" variant="danger" onClick={() => setOpenDeleteCollection(true)}>
-                <Trash2 className="h-3.5 w-3.5" />
-                Delete collection
-              </Button>
-            )}
             {caps?.can_write_records && (
               <Button size="sm" onClick={() => setOpenCreate(true)}>
                 <Plus className="h-3.5 w-3.5" />
@@ -615,11 +687,21 @@ export default function DataExplorerPage() {
         }
       />
 
+      {capsQuery.isError && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm" role="status">
+          Record permissions could not be loaded.
+          <Button size="sm" variant="secondary" onClick={() => capsQuery.refetch()}>
+            Retry permissions
+          </Button>
+        </div>
+      )}
+
       {/* Tabs: Active vs Trash */}
       <div className="mb-4 flex items-center gap-2 border-b border-[hsl(var(--border))] pb-2">
         <Button
           size="sm"
           variant={tab === "active" ? "primary" : "ghost"}
+          aria-pressed={tab === "active"}
           onClick={() => setTab("active")}
         >
           Active Records
@@ -627,9 +709,10 @@ export default function DataExplorerPage() {
         <Button
           size="sm"
           variant={tab === "trash" ? "primary" : "ghost"}
+          aria-pressed={tab === "trash"}
           onClick={() => setTab("trash")}
         >
-          Trash (Soft Deleted)
+          Trash
         </Button>
       </div>
 
@@ -641,6 +724,7 @@ export default function DataExplorerPage() {
               <Button
                 size="sm"
                 variant={searchMode === "structured" ? "primary" : "secondary"}
+                aria-pressed={searchMode === "structured"}
                 onClick={() => setSearchMode("structured")}
               >
                 Structured Filters
@@ -648,213 +732,332 @@ export default function DataExplorerPage() {
               <Button
                 size="sm"
                 variant={searchMode === "fulltext" ? "primary" : "secondary"}
+                aria-pressed={isFulltext}
                 onClick={() => setSearchMode("fulltext")}
               >
                 Full-text Search
               </Button>
             </div>
+            <Link href={`/w/${wid}/collections/${cid}/queries`} className="text-sm font-medium hover:underline">
+              Saved queries
+            </Link>
           </div>
-          {searchMode === "fulltext" ? (
+          {isFulltext ? (
             <FullTextSearchBar
               status={searchStatusQuery.data}
+              resultStatus={fulltextQuery.data?.index_status}
+              statusLoading={searchStatusQuery.isPending}
+              statusError={searchStatusQuery.isError}
+              onRefreshStatus={() => searchStatusQuery.refetch()}
               isSearching={fulltextQuery.isFetching}
+              text={fulltextDraft}
+              onTextChange={setFulltextDraft}
               onSearch={(q) => {
+                if (q === fulltextQueryText && fulltextCursorStack.length === 1) {
+                  void fulltextQuery.refetch();
+                }
                 setFulltextQueryText(q);
-                setFulltextCursor(null);
+                setFulltextCursorStack([null]);
               }}
               onClear={() => {
+                setFulltextDraft("");
                 setFulltextQueryText(null);
-                setFulltextCursor(null);
+                setFulltextCursorStack([null]);
               }}
             />
           ) : (
             <>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold uppercase text-[hsl(var(--muted-foreground))]">
-                Filter Logic
-              </span>
-              <Select
-                aria-label="Logical operator"
-                value={logic}
-                onChange={(e) => setLogic(e.target.value as "and" | "or")}
-              >
-                <option value="and">AND (all match)</option>
-                <option value="or">OR (any match)</option>
-              </Select>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() =>
-                  setFilterRows((r) => [
-                    ...r,
-                    { field: searchableFields[0] ?? "", op: "eq", value: "" },
-                  ])
-                }
-              >
-                + Add condition
-              </Button>
-            </div>
-            <div className="flex items-center gap-2">
-              {caps?.can_manage_collections && (
-                <Button size="sm" variant="secondary" onClick={() => setOpenSaveQuery(true)}>
-                  Save Query
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setFilterRows([]);
-                  setAppliedFilter(null);
-                  setCursorStack([null]);
-                }}
-              >
-                Reset
-              </Button>
-              <Button size="sm" onClick={applyFilters}>
-                Apply Filters
-              </Button>
-            </div>
-          </div>
-
-          <form
-            className="space-y-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              applyFilters();
-            }}
-          >
-            {filterRows.map((row, idx) => {
-              const type = fieldType(row.field);
-              return (
-                <div key={idx} className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold uppercase text-[hsl(var(--muted-foreground))]">
+                    Filter Logic
+                  </span>
                   <Select
-                    aria-label={`Filter field ${idx + 1}`}
-                    value={row.field}
-                    onChange={(e) => updateRow(idx, { field: e.target.value, value: "" })}
+                    aria-label="Logical operator"
+                    value={logic}
+                    onChange={(e) => setLogic(e.target.value as "and" | "or")}
                   >
-                    {!searchableFields.includes(row.field) && (
-                      <option value="" disabled>
-                        Select field…
-                      </option>
-                    )}
-                    {searchableFields.map((f) => (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ))}
+                    <option value="and">AND (all match)</option>
+                    <option value="or">OR (any match)</option>
                   </Select>
-                  <Select
-                    aria-label={`Filter operator ${idx + 1}`}
-                    value={row.op}
-                    onChange={(e) => {
-                      const op = e.target.value as FilterOp;
-                      updateRow(idx, op === "exists" ? { op, value: "true" } : { op });
-                    }}
-                  >
-                    {FILTER_OPS.map((op) => (
-                      <option key={op} value={op}>
-                        {op}
-                      </option>
-                    ))}
-                  </Select>
-                  {row.op === "exists" ? (
-                    <Select
-                      aria-label={`Filter value ${idx + 1}`}
-                      value={row.value === "false" ? "false" : "true"}
-                      onChange={(e) => updateRow(idx, { value: e.target.value })}
-                    >
-                      <option value="true">exists</option>
-                      <option value="false">missing</option>
-                    </Select>
-                  ) : type === "boolean" && row.op !== "in" ? (
-                    <Select
-                      aria-label={`Filter value ${idx + 1}`}
-                      value={row.value}
-                      onChange={(e) => updateRow(idx, { value: e.target.value })}
-                    >
-                      <option value="">Select…</option>
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </Select>
-                  ) : type === "datetime" && row.op !== "in" && row.op !== "contains" ? (
-                    <Input
-                      aria-label={`Filter value ${idx + 1}`}
-                      type="datetime-local"
-                      className="max-w-xs"
-                      value={row.value ? toLocalInput(row.value) : ""}
-                      onChange={(e) =>
-                        updateRow(idx, {
-                          value: e.target.value ? new Date(e.target.value).toISOString() : "",
-                        })
-                      }
-                    />
-                  ) : (
-                    <Input
-                      aria-label={`Filter value ${idx + 1}`}
-                      className="max-w-xs"
-                      type={type === "number" && row.op !== "in" ? "number" : "text"}
-                      value={row.value}
-                      onChange={(e) => updateRow(idx, { value: e.target.value })}
-                      placeholder={row.op === "in" ? "value1, value2, …" : "Value..."}
-                    />
-                  )}
                   <Button
-                    type="button"
                     size="sm"
-                    variant="ghost"
-                    onClick={() => setFilterRows((prev) => prev.filter((_, i) => i !== idx))}
+                    variant="secondary"
+                    onClick={() =>
+                      setFilterRows((r) => [
+                        ...r,
+                        { field: searchableFields[0] ?? "", op: "eq", value: "" },
+                      ])
+                    }
                   >
-                    Remove
+                    + Add condition
                   </Button>
                 </div>
-              );
-            })}
-            {/* Enables Enter-to-apply from any input */}
-            <button type="submit" hidden aria-hidden tabIndex={-1} />
-          </form>
+                <div className="flex items-center gap-2">
+                  {caps?.can_manage_collections && (
+                    <Button size="sm" variant="secondary" onClick={() => setOpenSaveQuery(true)}>
+                      Save Query
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setFilterRows([]);
+                      setAppliedFilter(null);
+                      setCursorStack([null]);
+                      setFilterError(null);
+                    }}
+                  >
+                    Reset
+                  </Button>
+                  <Button size="sm" onClick={applyFilters}>
+                    Apply Filters
+                  </Button>
+                </div>
+              </div>
+
+              <form
+                className="space-y-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  applyFilters();
+                }}
+              >
+                {filterRows.map((row, idx) => {
+                  const type = fieldType(row.field);
+                  return (
+                    <div key={idx} className="flex flex-wrap items-center gap-2">
+                      <Select
+                        aria-label={`Filter field ${idx + 1}`}
+                        value={row.field}
+                        onChange={(e) => updateRow(idx, { field: e.target.value, value: "" })}
+                      >
+                        {!searchableFields.includes(row.field) && (
+                          <option value="" disabled>
+                            Select field…
+                          </option>
+                        )}
+                        {searchableFields.map((f) => (
+                          <option key={f} value={f}>
+                            {f}
+                          </option>
+                        ))}
+                      </Select>
+                      <Select
+                        aria-label={`Filter operator ${idx + 1}`}
+                        value={row.op}
+                        onChange={(e) => {
+                          const op = e.target.value as FilterOp;
+                          updateRow(idx, { op, value: op === "exists" ? "true" : "" });
+                        }}
+                      >
+                        {FILTER_OPS.map((op) => (
+                          <option key={op} value={op}>
+                            {op}
+                          </option>
+                        ))}
+                      </Select>
+                      {row.op === "exists" ? (
+                        <Select
+                          aria-label={`Filter value ${idx + 1}`}
+                          value={row.value === "false" ? "false" : "true"}
+                          onChange={(e) => updateRow(idx, { value: e.target.value })}
+                        >
+                          <option value="true">exists</option>
+                          <option value="false">missing</option>
+                        </Select>
+                      ) : row.op === "between" ? (
+                        <div className="flex min-w-0 flex-wrap gap-2">
+                          {(["From", "To"] as const).map((label, bound) => {
+                            const values = row.value.split(",");
+                            const value = values[bound] ?? "";
+                            return (
+                              <Input
+                                key={label}
+                                aria-label={`${label} value for condition ${idx + 1}`}
+                                type={type === "datetime" ? "datetime-local" : type === "number" ? "number" : "text"}
+                                step="any"
+                                className="w-auto max-w-full"
+                                placeholder={label}
+                                value={type === "datetime" && value ? toLocalInput(value) : value}
+                                onChange={(e) => {
+                                  const next = e.target.value;
+                                  values[bound] = type === "datetime" && next ? new Date(next).toISOString() : next;
+                                  updateRow(idx, { value: values.join(",") });
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      ) : type === "boolean" && row.op !== "in" ? (
+                        <Select
+                          aria-label={`Filter value ${idx + 1}`}
+                          value={row.value}
+                          onChange={(e) => updateRow(idx, { value: e.target.value })}
+                        >
+                          <option value="">Select…</option>
+                          <option value="true">true</option>
+                          <option value="false">false</option>
+                        </Select>
+                      ) : type === "datetime" && row.op !== "in" && row.op !== "contains" ? (
+                        <Input
+                          aria-label={`Filter value ${idx + 1}`}
+                          type="datetime-local"
+                          className="max-w-xs"
+                          value={row.value ? toLocalInput(row.value) : ""}
+                          onChange={(e) =>
+                            updateRow(idx, {
+                              value: e.target.value ? new Date(e.target.value).toISOString() : "",
+                            })
+                          }
+                        />
+                      ) : (
+                        <Input
+                          aria-label={`Filter value ${idx + 1}`}
+                          className="max-w-xs"
+                          type={type === "number" && row.op !== "in" ? "number" : "text"}
+                          step="any"
+                          value={row.value}
+                          onChange={(e) => updateRow(idx, { value: e.target.value })}
+                          placeholder={row.op === "in" ? "value1, value2, …" : "Value..."}
+                        />
+                      )}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setFilterRows((prev) => prev.filter((_, i) => i !== idx))}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  );
+                })}
+                {filterError && <p className="text-sm text-[hsl(var(--destructive))]" role="alert">{filterError}</p>}
+                {/* Enables Enter-to-apply from any input */}
+                <button type="submit" hidden aria-hidden tabIndex={-1} />
+              </form>
             </>
           )}
         </Card>
       )}
 
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <div className="w-full min-w-0 text-sm font-medium sm:w-auto sm:flex-1" aria-live="polite">
+          {isFulltext
+            ? fulltextQueryText && <span className="break-words">Results for “{fulltextQueryText}”</span>
+            : tab === "trash" ? "Deleted records" : "Records"}
+        </div>
+        <FieldVisibilityPicker
+          availablePaths={discoveredPaths}
+          visibleColumns={visibleColumns}
+          onChange={handleColumnsChange}
+        />
+        <Link
+          href={`/w/${wid}/collections/${cid}/schema`}
+          className="inline-flex h-8 items-center rounded-md border border-[hsl(var(--border))] px-3 text-xs font-medium hover:bg-[hsl(var(--muted))]"
+        >
+          Schema (v{colQuery.data?.schema_version ?? 1})
+        </Link>
+        {(canExport || canImport || canDeleteCollection) && (
+          <div
+            className="relative"
+            onBlur={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget)) setShowActions(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.currentTarget.querySelector("button")?.focus();
+                setShowActions(false);
+              }
+            }}
+          >
+            <Button size="sm" variant="secondary" aria-expanded={showActions} onClick={() => setShowActions(!showActions)}>
+              Actions
+              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+            </Button>
+            {showActions && (
+              <div className="absolute right-0 z-30 mt-1 flex w-40 flex-col rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--surface-elevated))] p-1 shadow-lg">
+                {canExport && (
+                  <Button size="sm" variant="ghost" className="justify-start" onClick={() => {
+                    setShowActions(false);
+                    exportMutation.mutate("csv");
+                  }}>
+                    <Download className="h-3.5 w-3.5" />
+                    Export CSV
+                  </Button>
+                )}
+                {canImport && (
+                  <Button size="sm" variant="ghost" className="justify-start" onClick={() => {
+                    setShowActions(false);
+                    setOpenImport(true);
+                  }}>
+                    <Upload className="h-3.5 w-3.5" />
+                    Import
+                  </Button>
+                )}
+                {canDeleteCollection && (
+                  <Button size="sm" variant="ghost" className="justify-start text-[hsl(var(--destructive))]" onClick={() => {
+                    setShowActions(false);
+                    setOpenDeleteCollection(true);
+                  }}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete collection
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Records Table */}
       {currentQuery.isLoading && <SkeletonTable rows={6} />}
-      {currentQuery.isError && (
+      {currentQuery.isError && (!isFulltext || fulltextQueryText) && (
         <ErrorState error={currentQuery.error} onRetry={() => currentQuery.refetch()} />
       )}
 
       {currentQuery.isSuccess && activeRows.length === 0 && (
         <EmptyState
-          title={tab === "active" ? "No records match" : "Trash is empty"}
-          description={
-            tab === "active"
-              ? "Add a record or adjust your filter criteria."
-              : "Soft-deleted records appear here within the retention window."
-          }
+          title={isFulltext && currentQuery.data?.has_more
+            ? "No available records on this page"
+            : tab === "active" ? "No records match" : "Trash is empty"}
+          description={isFulltext
+            ? currentQuery.data?.has_more
+              ? "Some indexed matches are no longer available. Continue to the next page."
+              : "Try different words or check the index coverage above."
+            : tab === "active"
+              ? "Adjust the filters or add a record."
+              : "Deleted records appear here within the retention window."}
         />
       )}
 
       {activeRows.length > 0 && (
-        <Card className="overflow-x-auto p-0">
-          <table className="w-full border-collapse text-left text-sm">
+        <div className="overflow-x-auto rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--surface-elevated))]">
+          <table className="w-full border-separate border-spacing-0 text-left text-sm">
             <thead className="border-b border-[hsl(var(--border))] bg-[hsl(var(--surface))] text-xs uppercase text-[hsl(var(--muted-foreground))]">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id}>
                   {hg.headers.map((header) => (
-                    <th key={header.id} className="px-4 py-3 font-medium">
+                    <th key={header.id} scope="col" className={`border-b border-[hsl(var(--border))] px-3 py-2.5 font-medium ${
+                      header.column.id === "record" ? "sticky left-0 z-10 bg-[hsl(var(--surface))]" : ""
+                    }`}>
                       {flexRender(header.column.columnDef.header, header.getContext())}
                     </th>
                   ))}
                 </tr>
               ))}
             </thead>
-            <tbody className="divide-y divide-[hsl(var(--border))]">
+            <tbody>
               {table.getRowModel().rows.map((row) => (
-                <tr key={row.id} className="hover:bg-[hsl(var(--surface))]">
+                <tr key={row.id} className="group hover:bg-[hsl(var(--surface))]">
                   {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="px-4 py-2.5">
+                    <td key={cell.id} className={`border-b border-[hsl(var(--border))] px-3 py-2 align-top ${
+                      cell.column.id === "record"
+                        ? "sticky left-0 z-10 w-px border-r bg-[hsl(var(--surface-elevated))] group-hover:bg-[hsl(var(--surface))]"
+                        : "min-w-28 max-w-xs"
+                    }`}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
                   ))}
@@ -862,15 +1065,20 @@ export default function DataExplorerPage() {
               ))}
             </tbody>
           </table>
-        </Card>
+        </div>
+      )}
+
+      {isFulltext && fulltextQuery.data?.result_window_limited && (
+        <p className="mt-3 text-sm text-[hsl(var(--muted-foreground))]">
+          You reached the 1,000-match search limit. Narrow your search to find other records.
+        </p>
       )}
 
       {/* Cursor Pagination Controls */}
-      {currentQuery.data && (pageStack.length > 1 || currentQuery.data.has_more) && (
+      {(pageStack.length > 1 || currentQuery.data?.has_more) && (
         <div className="mt-4 flex items-center justify-between">
           <div className="text-xs text-[hsl(var(--muted-foreground))]">
-            Page {pageStack.length} · Records {(pageStack.length - 1) * PAGE_SIZE + (activeRows.length ? 1 : 0)}
-            –{(pageStack.length - 1) * PAGE_SIZE + activeRows.length}
+            Page {pageStack.length} · {activeRows.length} records on this page
             {currentQuery.isFetching && " · Loading…"}
           </div>
           <div className="flex items-center gap-2">
@@ -888,7 +1096,7 @@ export default function DataExplorerPage() {
               disabled={
                 currentQuery.isFetching ||
                 currentQuery.isPlaceholderData ||
-                !currentQuery.data.has_more ||
+                !currentQuery.data?.has_more ||
                 !currentQuery.data.next_cursor
               }
               onClick={() => {
@@ -933,19 +1141,14 @@ export default function DataExplorerPage() {
       <Modal
         open={Boolean(editingRecord)}
         onClose={() => {
-          setEditingRecord(null);
-          setConflictRecord(null);
+          if (!updateMutation.isPending) setEditingRecord(null);
         }}
-        title={
-          editingRecord
-            ? `Record ${editingRecord.id.slice(-8)} (v${editingRecord.version})`
-            : "Record"
-        }
+        title="Edit record"
       >
         {editingRecord && (
           <div className="space-y-3">
             <div className="flex items-center justify-between text-xs text-[hsl(var(--muted-foreground))]">
-              <span className="font-mono">{editingRecord.id}</span>
+              <span className="break-all font-mono">{editingRecord.id} · v{editingRecord.version}</span>
               <CopyButton text={editingRecord.id} label="Copy ID" />
             </div>
 
@@ -965,6 +1168,7 @@ export default function DataExplorerPage() {
                     setEditingRecord(conflictRecord);
                     setEditJson(JSON.stringify(conflictRecord.data, null, 2));
                     setConflictRecord(null);
+                    setEditError(null);
                   }}
                 >
                   <RefreshCw className="h-3 w-3" />
@@ -976,18 +1180,25 @@ export default function DataExplorerPage() {
             <textarea
               aria-label="Record JSON data"
               rows={10}
-              readOnly={!caps?.can_write_records}
+              readOnly={!canEdit || updateMutation.isPending}
               value={editJson}
-              onChange={(e) => setEditJson(e.target.value)}
-              className="w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3 font-mono text-xs"
+              onChange={(e) => {
+                setEditJson(e.target.value);
+                if (!conflictRecord) setEditError(null);
+              }}
+              className="max-h-[45dvh] w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3 font-mono text-xs"
             />
+            {editError && <p className="text-sm text-[hsl(var(--destructive))]" role="alert">{editError}</p>}
             <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setEditingRecord(null)}>
-                Close
+              <Button variant="secondary" disabled={updateMutation.isPending} onClick={() => setEditingRecord(null)}>
+                Cancel
               </Button>
-              {caps?.can_write_records && (
-                <Button onClick={() => updateMutation.mutate()} disabled={updateMutation.isPending}>
-                  {updateMutation.isPending ? "Saving..." : "Save Changes"}
+              {canEdit && (
+                <Button
+                  onClick={() => updateMutation.mutate()}
+                  disabled={updateMutation.isPending || Boolean(conflictRecord)}
+                >
+                  {updateMutation.isPending ? "Saving…" : "Save changes"}
                 </Button>
               )}
             </div>
@@ -1113,18 +1324,16 @@ export default function DataExplorerPage() {
           router.push(`/w/${wid}/collections`);
         }}
       />
-      <RecordDetailDrawer
-        record={inspectedRecord}
-        onClose={() => setInspectedRecord(null)}
-        canEdit={Boolean(caps?.can_write_records)}
-        onEdit={(rec) => {
-          setInspectedRecord(null);
-          setEditingRecord(rec);
-          setEditJson(JSON.stringify(rec.data, null, 2));
-          setConflictRecord(null);
-        }}
-        onCopyToast={(msg) => toast({ title: msg, variant: "success" })}
-      />
+      {inspectedRecord && (
+        <RecordDetailDrawer
+          key={inspectedRecord.id}
+          record={inspectedRecord}
+          onClose={() => setInspectedRecord(null)}
+          canEdit={canEdit}
+          onEdit={openEditor}
+          onCopyToast={(msg) => toast({ title: msg, variant: "success" })}
+        />
+      )}
     </AppShell>
   );
 }

@@ -7,7 +7,7 @@ from flask.typing import ResponseReturnValue
 
 from data_collector.api.middleware import get_container, get_current_actor, require_auth
 from data_collector.api.schemas import FulltextSearchRequest
-from data_collector.domain.exceptions import BadRequestError
+from data_collector.domain.exceptions import BadRequestError, ValidationError
 
 fulltext_bp = Blueprint("fulltext_v1", __name__)
 
@@ -20,6 +20,8 @@ def fulltext_search_records(cid: str) -> ResponseReturnValue:
     if not isinstance(body, dict):
         raise BadRequestError("JSON object body is required")
     dto = FulltextSearchRequest.model_validate(body)
+    if dto.filter is not None or body.get("filters") is not None:
+        raise ValidationError("Full-text search does not support structured filters")
     res = get_container().fulltext_search.search(
         actor,
         cid,

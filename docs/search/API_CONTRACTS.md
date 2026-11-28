@@ -19,7 +19,9 @@ Existing Safe Query DSL endpoint, now gated by `search_planner.py`:
 
 ## 5. `POST /api/v1/collections/{cid}/records/fulltext`
 Request: `{ "query": "...", "fields": ["..."], "limit": 25, "cursor": null, "sort": "relevance" }`.
-- Returns `503 SEARCH_INDEX_NOT_READY` when `FULLTEXT_SEARCH_ENABLED=false` or backend is unavailable (never falls back to MongoDB regex).
+- Returns `503 SEARCH_INDEX_NOT_READY` when reads are disabled, the collection has no confirmed backfill, or the external engine is unavailable.
+- Field-scoped search uses exact extracted paths such as `details.message` or `tags[]`. Structured filters return a validation error on this endpoint.
+- Reuse `next_cursor` as an opaque value for the same collection, query, sort and limit. Meilisearch exposes a bounded window of 1,000 results and returns `result_window_limited: true` on reaching it.
 - Returns hydrated `items` (`record`, `highlights`, `score`), `index_status` (`state`, `coverage`, `indexed_records`, `as_of`), and `result_total: {"value": null, "accuracy": "unavailable"}`.
 
 ## 6. `GET /api/v1/collections/{cid}/search/status`
